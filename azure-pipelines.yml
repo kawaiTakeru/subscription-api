@@ -2,7 +2,7 @@
 trigger: none
 pr: none
 
-# 将来 Function から渡す入口パラメータ（手動実行時もここで変更可）
+# 手動実行や将来のFunctionトリガで差し替える入口
 parameters:
 - name: env
   type: string
@@ -11,7 +11,7 @@ parameters:
   type: string
   default: canadacentral
 
-# --- Stage0 (必須) に必要な入力 ---
+# --- Stage0 入力（既定値をあなたの実値で埋めました）---
 - name: subscriptionAliasName
   type: string
   default: "cr_subscription_test_99"
@@ -20,22 +20,25 @@ parameters:
   default: "CR 検証サブスクリプション 99"
 - name: billingAccountName
   type: string
-  default: ""
+  default: "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84-9d39-05562a37bab0_2019-05-31"
 - name: billingProfileName
   type: string
-  default: ""
+  default: "IAMZ-4Q5A-BG7-PGB"
 - name: invoiceSectionName
   type: string
-  default: ""
+  default: "6HB2-O3GL-PJA-PGB"
 - name: workload
   type: string
   default: "Production"   # or "DevTest"
+- name: managementGroupId
+  type: string
+  default: "2b72ff53-757a-41b9-aa8f-7056292c626e"  # 例：Tenant Root Group の MG ID
 - name: planOnly
   type: boolean
-  default: false          # trueにするとplanだけ
+  default: false          # true で plan のみ
 
 # =========================================================
-# Stage0: Subscription (実行される)
+# Stage0: Subscription
 # =========================================================
 stages:
 - stage: stage0_subscription
@@ -46,7 +49,7 @@ stages:
     pool:
       vmImage: 'ubuntu-latest'
     steps:
-    # 0) Terraform がなければインストール（ある場合はスキップ）
+    # 0) Terraform インストール（無ければ）
     - task: Bash@3
       displayName: 'Install Terraform if missing'
       inputs:
@@ -63,17 +66,25 @@ stages:
           fi
           terraform -version
 
-    # 1) Azure接続（サービス接続で自動ログイン）
+    # 1) Azure接続 ＆ Terraform
     - task: AzureCLI@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       inputs:
-        azureSubscription: 'snp-pipeline-api'
+        azureSubscription: 'snp-pipeline-api'   # ← さっき作った Service connection
         scriptType: bash
         scriptLocation: inlineScript
         workingDirectory: $(Build.SourcesDirectory)/terraform/stage0-subscription
         inlineScript: |
           set -e
+
+          # 入口値の簡易バリデーション（空なら失敗）
+          for v in "${{ parameters.billingAccountName }}" "${{ parameters.billingProfileName }}" "${{ parameters.invoiceSectionName }}"; do
+            if [ -z "$v" ]; then
+              echo "❌ Billing パラメータが空です（billingAccountName / billingProfileName / invoiceSectionName）。"
+              exit 1
+            fi
+          done
 
           echo "== terraform init =="
           terraform init
@@ -86,6 +97,7 @@ stages:
             -var "billing_profile_name=${{ parameters.billingProfileName }}" \
             -var "invoice_section_name=${{ parameters.invoiceSectionName }}" \
             -var "subscription_workload=${{ parameters.workload }}" \
+            -var "management_group_id=${{ parameters.managementGroupId }}" \
             -out plan.out
 
           if [ "${{ parameters.planOnly }}" = "false" ]; then
@@ -101,7 +113,7 @@ stages:
           echo "##vso[task.setvariable variable=subscriptionId;isOutput=true]${SUB_ID}"
 
 # =========================================================
-# Stage1〜4: テンプレ（今はプレースホルダー）
+# Stage1〜4: ひな型（必要時に実装）
 # =========================================================
 
 # Stage1: Resource Group
@@ -113,9 +125,17 @@ stages:
   jobs:
   - job: placeholder_rg
     steps:
-    - bash: |
-        echo "[RG] placeholder"
-        echo "SubscriptionId from Stage0: $(subscriptionId)"
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          echo "[RG] placeholder"
+          echo "SubscriptionId from Stage0: $(subscriptionId)"
+          az account set --subscription "$(subscriptionId)"
+          az account show --query "{id:id,name:name}" -o tsv
 
 # Stage2: VNet
 - stage: stage2_vnet
