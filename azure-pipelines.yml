@@ -2,21 +2,18 @@
 trigger: none
 pr: none
 
-# ← このパイプラインは Default プールで実行（＝ラップトップ）
-#   Agent 名を固定したいなら demands を有効化
 pool:
   name: Default
+  # 固定したいなら demands を有効化（Agent.Name は Capabilities の値で完全一致）
+  # demands:
+  # - Agent.Name -equals LAPTOP-OEOER8QI
+
+variables:
+  - name: System.Debug
+    value: 'true'
 
 # 手動実行や将来のFunctionトリガで差し替える入口
 parameters:
-- name: env
-  type: string
-  default: dev
-- name: location
-  type: string
-  default: canadacentral
-
-# --- Stage0 入力（既定値）---
 - name: subscriptionAliasName
   type: string
   default: "cr_subscription_test_99"
@@ -37,14 +34,14 @@ parameters:
   default: "Production"   # or "DevTest"
 - name: managementGroupId
   type: string
-  default: "2b72ff53-757a-41b9-aa8f-7056292c626e"  # 例：Tenant Root Group の MG ID
+  default: "2b72ff53-757a-41b9-aa8f-7056292c626e"  # MG ID
 - name: planOnly
   type: boolean
   default: false          # true で plan のみ
 
 stages:
 # =========================================================
-# Stage0: Subscription
+# Stage0: Subscription (Create via AzAPI + attach to MG)
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -52,133 +49,68 @@ stages:
   - job: run_tf
     displayName: "Terraform apply (subscription)"
     steps:
-    # (任意) どのエージェントで走っているか確認
+    # どのエージェントで動いているか確認（任意）
     - powershell: |
-        Write-Host "Agent Name: $env:AGENT_NAME"
-        Write-Host "Agent OS:   $env:AGENT_OS"
-        Write-Host "Agent Pool: $env:AGENT_POOL"
+        Write-Host "Agent Name  : $env:AGENT_NAME"
+        Write-Host "Agent OS    : $env:AGENT_OS"
+        Write-Host "Agent Version: $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # 0) Terraform インストール（無ければ）
-    - task: Bash@3
-      displayName: 'Install Terraform if missing'
+    # Terraform 実行（PowerShell）
+    - task: PowerShell@2
+      name: tf
+      displayName: 'Terraform init/plan/apply (Stage0)'
+      env:
+        # ここはパイプライン変数/ライブラリから供給してね
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)   # 既存の任意サブスクでOK（AzAPIは管理面のAPI）
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
       inputs:
         targetType: 'inline'
         script: |
-          set -e
-          if ! command -v terraform >/dev/null 2>&1; then
-            echo "Terraform not found. Installing..."
-            sudo apt-get update -y || true
-            sudo apt-get install -y gnupg software-properties-common curl || true
-            curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg || true
-            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list || true
-            sudo apt-get update -y && sudo apt-get install -y terraform || true
-          fi
-          terraform -version
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$(Build.SourcesDirectory)/terraform/stage0-subscription"
 
-    # 1) Azure接続 ＆ Terraform
-    - task: AzureCLI@2
-      name: tf
-      displayName: 'Terraform init/plan/apply (Stage0)'
-      inputs:
-        azureSubscription: 'snp-pipeline-api'   # ← 作成済みの Service connection
-        scriptType: bash
-        scriptLocation: inlineScript
-        workingDirectory: $(Build.SourcesDirectory)/terraform/stage0-subscription
-        inlineScript: |
-          set -e
+          # Billing 入力チェック
+          $billingMissing = @()
+          if ([string]::IsNullOrWhiteSpace("${{ parameters.billingAccountName }}")) { $billingMissing += "billingAccountName" }
+          if ([string]::IsNullOrWhiteSpace("${{ parameters.billingProfileName }}")) { $billingMissing += "billingProfileName" }
+          if ([string]::IsNullOrWhiteSpace("${{ parameters.invoiceSectionName }}")) { $billingMissing += "invoiceSectionName" }
+          if ($billingMissing.Count -gt 0) {
+            Write-Error "❌ Billing パラメータが空: $($billingMissing -join ', ')"
+          }
 
-          # 入口値の簡易バリデーション（空なら失敗）
-          for v in "${{ parameters.billingAccountName }}" "${{ parameters.billingProfileName }}" "${{ parameters.invoiceSectionName }}"; do
-            if [ -z "$v" ]; then
-              echo "❌ Billing パラメータが空です（billingAccountName / billingProfileName / invoiceSectionName）。"
-              exit 1
-            fi
-          done
-
-          echo "== terraform init =="
+          Write-Host "== terraform init =="
           terraform init
 
-          echo "== terraform plan =="
-          terraform plan \
-            -var "subscription_alias_name=${{ parameters.subscriptionAliasName }}" \
-            -var "subscription_display_name=${{ parameters.subscriptionDisplayName }}" \
-            -var "billing_account_name=${{ parameters.billingAccountName }}" \
-            -var "billing_profile_name=${{ parameters.billingProfileName }}" \
-            -var "invoice_section_name=${{ parameters.invoiceSectionName }}" \
-            -var "subscription_workload=${{ parameters.workload }}" \
-            -var "management_group_id=${{ parameters.managementGroupId }}" \
+          Write-Host "== terraform plan =="
+          terraform plan `
+            -var "subscription_alias_name=${{ parameters.subscriptionAliasName }}" `
+            -var "subscription_display_name=${{ parameters.subscriptionDisplayName }}" `
+            -var "billing_account_name=${{ parameters.billingAccountName }}" `
+            -var "billing_profile_name=${{ parameters.billingProfileName }}" `
+            -var "invoice_section_name=${{ parameters.invoiceSectionName }}" `
+            -var "subscription_workload=${{ parameters.workload }}" `
+            -var "management_group_id=${{ parameters.managementGroupId }}" `
             -out plan.out
 
-          if [ "${{ parameters.planOnly }}" = "false" ]; then
-            echo "== terraform apply =="
+          if ("${{ parameters.planOnly }}" -eq "False") {
+            Write-Host "== terraform apply =="
             terraform apply -auto-approve plan.out
-          else
-            echo "Skip apply (planOnly=true)"
-          fi
+          } else {
+            Write-Host "Skip apply (planOnly=true)"
+          }
 
           # 出力を次ステージへ渡す
-          SUB_ID=$(terraform output -raw subscription_id 2>/dev/null || true)
-          echo "subscriptionId=${SUB_ID}"
-          echo "##vso[task.setvariable variable=subscriptionId;isOutput=true]${SUB_ID}"
+          $subId = ""
+          try {
+            $subId = terraform output -raw subscription_id
+          } catch {}
+          Write-Host "subscriptionId=$subId"
+          Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
 
-# =========================================================
-# Stage1〜4: ひな型（必要時に実装）
-# =========================================================
+          Pop-Location
 
-# Stage1: Resource Group
-- stage: stage1_rg
-  displayName: "Stage1 - Resource Group"
-  dependsOn: stage0_subscription
-  variables:
-    subscriptionId: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-  jobs:
-  - job: placeholder_rg
-    steps:
-    - task: AzureCLI@2
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          set -e
-          echo "[RG] placeholder"
-          echo "SubscriptionId from Stage0: $(subscriptionId)"
-          az account set --subscription "$(subscriptionId)"
-          az account show --query "{id:id,name:name}" -o tsv
-
-# Stage2: VNet
-- stage: stage2_vnet
-  displayName: "Stage2 - VNet"
-  dependsOn: stage1_rg
-  jobs:
-  - job: placeholder_vnet
-    steps:
-    - bash: echo "[VNET] placeholder"
-
-# Stage3: Subnet
-- stage: stage3_subnet
-  displayName: "Stage3 - Subnet"
-  dependsOn: stage2_vnet
-  jobs:
-  - job: placeholder_subnet
-    steps:
-    - bash: echo "[SUBNET] placeholder"
-
-# Stage4a: Peering Spoke->Hub
-- stage: stage4a_peering_s2h
-  displayName: "Stage4a - Peering Spoke->Hub"
-  dependsOn: stage3_subnet
-  jobs:
-  - job: placeholder_peering_s2h
-    steps:
-    - bash: echo "[PEERING S->H] placeholder"
-
-# Stage4b: Peering Hub->Spoke
-- stage: stage4b_peering_h2s
-  displayName: "Stage4b - Peering Hub->Spoke"
-  dependsOn: stage4a_peering_s2h
-  jobs:
-  - job: placeholder_peering_h2s
-    steps:
-    - bash: echo "[PEERING H->S] placeholder"
+# 以降の Stage1〜 は、あなたの RG/VNet/Subnet の PowerShell 版と同じ要領でOK
+# 必要になったらこの subscriptionId を参照して az account set するなど実装してください。
