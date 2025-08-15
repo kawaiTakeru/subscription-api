@@ -1,108 +1,154 @@
 # subscription-api / azure-pipelines.yml
-name: $(Date:yyyyMMdd)$(Rev:.r)
 trigger: none
 pr: none
 
-# ---- 将来、Function から渡す想定のパラメータ
+# 将来 Function から渡す入口パラメータ（手動実行時もここで変更可）
 parameters:
 - name: env
-  displayName: Environment
   type: string
   default: dev
 - name: location
-  displayName: Azure Region
   type: string
   default: canadacentral
-- name: displayName
+
+# --- Stage0 (必須) に必要な入力 ---
+- name: subscriptionAliasName
   type: string
-  default: "sub-xxx-dev"
-- name: aliasName
+  default: "cr_subscription_test_99"
+- name: subscriptionDisplayName
   type: string
-  default: "sub-xxx-dev"
-- name: mgId
+  default: "CR 検証サブスクリプション 99"
+- name: billingAccountName
   type: string
   default: ""
-- name: billingScope
+- name: billingProfileName
   type: string
   default: ""
+- name: invoiceSectionName
+  type: string
+  default: ""
+- name: workload
+  type: string
+  default: "Production"   # or "DevTest"
 - name: planOnly
   type: boolean
-  default: false
-# どのステージを走らせるか（今は subscription だけ true）
-- name: runStages
-  type: object
-  default:
-    subscription: true
-    rg:          false
-    vnet:        false
-    subnet:      false
-    peering_s2h: false  # spoke -> hub
-    peering_h2s: false  # hub   -> spoke
+  default: false          # trueにするとplanだけ
 
-# ---- Stage 0: Subscription（まずはここだけ使う）
+# =========================================================
+# Stage0: Subscription (実行される)
+# =========================================================
 stages:
 - stage: stage0_subscription
-  displayName: "Stage0 - Subscription"
-  condition: and(succeeded(), eq('${{ parameters.runStages.subscription }}', 'true'))
+  displayName: "Stage0 - Create Subscription (AzAPI)"
   jobs:
-  - job: placeholder_subscription
-    displayName: "Subscription: placeholder"
+  - job: run_tf
+    displayName: "Terraform apply (subscription)"
+    pool:
+      vmImage: 'ubuntu-latest'
     steps:
-    - script: |
-        echo "[SUBSCRIPTION] env=$(env) location=$(location)"
-        echo "displayName=$(displayName) aliasName=$(aliasName)"
-        echo "mgId=$(mgId) billingScope=$(billingScope) planOnly=$(planOnly)"
-      env:
-        env: ${{ parameters.env }}
-        location: ${{ parameters.location }}
-        displayName: ${{ parameters.displayName }}
-        aliasName: ${{ parameters.aliasName }}
-        mgId: ${{ parameters.mgId }}
-        billingScope: ${{ parameters.billingScope }}
-        planOnly: ${{ parameters.planOnly }}
+    # 0) Terraform がなければインストール（ある場合はスキップ）
+    - task: Bash@3
+      displayName: 'Install Terraform if missing'
+      inputs:
+        targetType: 'inline'
+        script: |
+          set -e
+          if ! command -v terraform >/dev/null 2>&1; then
+            echo "Terraform not found. Installing..."
+            sudo apt-get update -y
+            sudo apt-get install -y gnupg software-properties-common curl
+            curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+            sudo apt-get update -y && sudo apt-get install -y terraform
+          fi
+          terraform -version
 
-# ---- Stage 1: RG
+    # 1) Azure接続（サービス接続で自動ログイン）
+    - task: AzureCLI@2
+      name: tf
+      displayName: 'Terraform init/plan/apply (Stage0)'
+      inputs:
+        azureSubscription: 'svc-subscription-factory'   # ← 新しいSPNのサービス接続名に合わせる
+        scriptType: bash
+        scriptLocation: inlineScript
+        workingDirectory: $(Build.SourcesDirectory)/terraform/stage0-subscription
+        inlineScript: |
+          set -e
+
+          echo "== terraform init =="
+          terraform init
+
+          echo "== terraform plan =="
+          terraform plan \
+            -var "subscription_alias_name=${{ parameters.subscriptionAliasName }}" \
+            -var "subscription_display_name=${{ parameters.subscriptionDisplayName }}" \
+            -var "billing_account_name=${{ parameters.billingAccountName }}" \
+            -var "billing_profile_name=${{ parameters.billingProfileName }}" \
+            -var "invoice_section_name=${{ parameters.invoiceSectionName }}" \
+            -var "subscription_workload=${{ parameters.workload }}" \
+            -out plan.out
+
+          if [ "${{ parameters.planOnly }}" = "false" ]; then
+            echo "== terraform apply =="
+            terraform apply -auto-approve plan.out
+          else
+            echo "Skip apply (planOnly=true)"
+          fi
+
+          # 出力を次ステージへ渡す
+          SUB_ID=$(terraform output -raw subscription_id 2>/dev/null || true)
+          echo "subscriptionId=${SUB_ID}"
+          echo "##vso[task.setvariable variable=subscriptionId;isOutput=true]${SUB_ID}"
+
+# =========================================================
+# Stage1〜4: テンプレ（今はプレースホルダー）
+# =========================================================
+
+# Stage1: Resource Group
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
-  condition: and(succeeded(), eq('${{ parameters.runStages.rg }}', 'true'))
+  dependsOn: stage0_subscription
+  variables:
+    subscriptionId: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
   jobs:
   - job: placeholder_rg
     steps:
-    - script: echo "[RG] placeholder (terraform/ stage1-rg)"
+    - bash: |
+        echo "[RG] placeholder"
+        echo "SubscriptionId from Stage0: $(subscriptionId)"
 
-# ---- Stage 2: VNet
+# Stage2: VNet
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
-  condition: and(succeeded(), eq('${{ parameters.runStages.vnet }}', 'true'))
+  dependsOn: stage1_rg
   jobs:
   - job: placeholder_vnet
     steps:
-    - script: echo "[VNET] placeholder (terraform/ stage2-vnet)"
+    - bash: echo "[VNET] placeholder"
 
-# ---- Stage 3: Subnet
+# Stage3: Subnet
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
-  condition: and(succeeded(), eq('${{ parameters.runStages.subnet }}', 'true'))
+  dependsOn: stage2_vnet
   jobs:
   - job: placeholder_subnet
     steps:
-    - script: echo "[SUBNET] placeholder (terraform/ stage3-subnet)"
+    - bash: echo "[SUBNET] placeholder"
 
-# ---- Stage 4a: Peering Spoke -> Hub
+# Stage4a: Peering Spoke->Hub
 - stage: stage4a_peering_s2h
   displayName: "Stage4a - Peering Spoke->Hub"
-  condition: and(succeeded(), eq('${{ parameters.runStages.peering_s2h }}', 'true'))
+  dependsOn: stage3_subnet
   jobs:
   - job: placeholder_peering_s2h
     steps:
-    - script: echo "[PEERING S->H] placeholder (terraform/ stage4a-peering-spoke-to-hub)"
+    - bash: echo "[PEERING S->H] placeholder"
 
-# ---- Stage 4b: Peering Hub -> Spoke
+# Stage4b: Peering Hub->Spoke
 - stage: stage4b_peering_h2s
   displayName: "Stage4b - Peering Hub->Spoke"
-  condition: and(succeeded(), eq('${{ parameters.runStages.peering_h2s }}', 'true'))
+  dependsOn: stage4a_peering_s2h
   jobs:
   - job: placeholder_peering_h2s
     steps:
-    - script: echo "[PEERING H->S] placeholder (terraform/ stage4b-peering-hub-to-spoke)"
-
+    - bash: echo "[PEERING H->S] placeholder"
