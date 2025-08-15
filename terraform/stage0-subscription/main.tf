@@ -26,13 +26,36 @@ provider "azurerm" {
 }
 
 # ===== Inputs（値はパイプラインから -var で渡す）=====
-variable "subscription_alias_name"   { type = string }
-variable "subscription_display_name" { type = string }
-variable "billing_account_name"      { type = string }  # 例: 0ae8..._2019-05-31
-variable "billing_profile_name"      { type = string }  # 例: IAMZ-4Q5A-BG7-PGB
-variable "invoice_section_name"      { type = string }  # 例: 6HB2-O3GL-PJA-PGB
-variable "subscription_workload"     { type = string  default = "Production" } # or "DevTest"
-variable "management_group_id"       { type = string }  # 例: 2b72ff53-757a-41b9-aa8f-7056292c626e
+variable "subscription_alias_name" {
+  type = string
+}
+
+variable "subscription_display_name" {
+  type = string
+}
+
+variable "billing_account_name" {
+  type = string  # 例: 0ae8..._2019-05-31
+}
+
+variable "billing_profile_name" {
+  type = string  # 例: IAMZ-4Q5A-BG7-PGB
+}
+
+variable "invoice_section_name" {
+  type = string  # 例: 6HB2-O3GL-PJA-PGB
+}
+
+variable "subscription_workload" {
+  type    = string
+  default = "Production" # or "DevTest"
+}
+
+variable "management_group_id" {
+  type = string  # 例: 2b72ff53-757a-41b9-aa8f-7056292c626e
+}
+
+
 
 # ===== Optional: Billing 読取チェック（権限が無ければ明示的に失敗）=====
 data "azapi_resource_list" "billing_accounts" {
