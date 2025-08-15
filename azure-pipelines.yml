@@ -4,44 +4,15 @@ pr: none
 
 pool:
   name: Default
-  # 固定したいなら demands を有効化（Agent.Name は Capabilities の値で完全一致）
-  # demands:
-  # - Agent.Name -equals LAPTOP-OEOER8QI
 
 variables:
   - name: System.Debug
     value: 'true'
 
-# 手動実行や将来のFunctionトリガで差し替える入口
-parameters:
-- name: subscriptionAliasName
-  type: string
-  default: "cr_subscription_test_99"
-- name: subscriptionDisplayName
-  type: string
-  default: "CR 検証サブスクリプション 99"
-- name: billingAccountName
-  type: string
-  default: "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84-9d39-05562a37bab0_2019-05-31"
-- name: billingProfileName
-  type: string
-  default: "IAMZ-4Q5A-BG7-PGB"
-- name: invoiceSectionName
-  type: string
-  default: "6HB2-O3GL-PJA-PGB"
-- name: workload
-  type: string
-  default: "Production"   # or "DevTest"
-- name: managementGroupId
-  type: string
-  default: "2b72ff53-757a-41b9-aa8f-7056292c626e"  # MG ID
-- name: planOnly
-  type: boolean
-  default: false          # true で plan のみ
-
+# パラメータは YAML 側には持たせず、値は terraform.tfvars で管理
 stages:
 # =========================================================
-# Stage0: Subscription (Create via AzAPI + attach to MG)
+# Stage0: Subscription (Create via AzAPI)
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -49,64 +20,45 @@ stages:
   - job: run_tf
     displayName: "Terraform apply (subscription)"
     steps:
-    # どのエージェントで動いているか確認（任意）
     - powershell: |
         Write-Host "Agent Name  : $env:AGENT_NAME"
         Write-Host "Agent OS    : $env:AGENT_OS"
-        Write-Host "Agent Version: $env:AGENT_VERSION"
+        Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # Terraform 実行（PowerShell）
     - task: PowerShell@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       env:
-        # ここはパイプライン変数/ライブラリから供給してね
         ARM_CLIENT_ID: $(ARM_CLIENT_ID)
         ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)   # 既存の任意サブスクでOK（AzAPIは管理面のAPI）
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
         ARM_TENANT_ID: $(ARM_TENANT_ID)
       inputs:
         targetType: 'inline'
         script: |
           $ErrorActionPreference = 'Stop'
-          Push-Location "$(Build.SourcesDirectory)/terraform/stage0-subscription"
+          $stageDir = "$(Build.SourcesDirectory)/terraform/stage0-subscription"
+          $tfvars   = "$(Build.SourcesDirectory)/terraform/terraform.tfvars"
 
-          # Billing 入力チェック
-          $billingMissing = @()
-          if ([string]::IsNullOrWhiteSpace("${{ parameters.billingAccountName }}")) { $billingMissing += "billingAccountName" }
-          if ([string]::IsNullOrWhiteSpace("${{ parameters.billingProfileName }}")) { $billingMissing += "billingProfileName" }
-          if ([string]::IsNullOrWhiteSpace("${{ parameters.invoiceSectionName }}")) { $billingMissing += "invoiceSectionName" }
-          if ($billingMissing.Count -gt 0) {
-            Write-Error "❌ Billing パラメータが空: $($billingMissing -join ', ')"
+          if (-not (Test-Path $tfvars)) {
+            Write-Error "terraform.tfvars が見つかりません: $tfvars"
           }
+
+          Push-Location $stageDir
 
           Write-Host "== terraform init =="
           terraform init
 
           Write-Host "== terraform plan =="
-          terraform plan `
-            -var "subscription_alias_name=${{ parameters.subscriptionAliasName }}" `
-            -var "subscription_display_name=${{ parameters.subscriptionDisplayName }}" `
-            -var "billing_account_name=${{ parameters.billingAccountName }}" `
-            -var "billing_profile_name=${{ parameters.billingProfileName }}" `
-            -var "invoice_section_name=${{ parameters.invoiceSectionName }}" `
-            -var "subscription_workload=${{ parameters.workload }}" `
-            -var "management_group_id=${{ parameters.managementGroupId }}" `
-            -out plan.out
+          terraform plan -var-file="$tfvars" -out plan.out
 
-          if ("${{ parameters.planOnly }}" -eq "False") {
-            Write-Host "== terraform apply =="
-            terraform apply -auto-approve plan.out
-          } else {
-            Write-Host "Skip apply (planOnly=true)"
-          }
+          Write-Host "== terraform apply =="
+          terraform apply -auto-approve plan.out
 
           # 出力を次ステージへ渡す
           $subId = ""
-          try {
-            $subId = terraform output -raw subscription_id
-          } catch {}
+          try { $subId = terraform output -raw subscription_id } catch {}
           Write-Host "subscriptionId=$subId"
           Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
 
