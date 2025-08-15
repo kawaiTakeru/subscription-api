@@ -68,7 +68,7 @@ stages:
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       inputs:
-        azureSubscription: 'svc-subscription-factory'   # ← 新しいSPNのサービス接続名に合わせる
+        azureSubscription: 'snp-pipeline-api'
         scriptType: bash
         scriptLocation: inlineScript
         workingDirectory: $(Build.SourcesDirectory)/terraform/stage0-subscription
