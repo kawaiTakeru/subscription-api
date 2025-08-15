@@ -2,6 +2,13 @@
 trigger: none
 pr: none
 
+# ← このパイプラインは Default プールで実行（＝ラップトップ）
+#   Agent 名を固定したいなら demands を有効化
+pool:
+  name: Default
+  demands:
+  - Agent.Name -equals LAPTOP-OEOER8QI   # ← ラップトップのAgent名。不要ならこの2行を消してOK
+
 # 手動実行や将来のFunctionトリガで差し替える入口
 parameters:
 - name: env
@@ -11,7 +18,7 @@ parameters:
   type: string
   default: canadacentral
 
-# --- Stage0 入力（既定値をあなたの実値で埋めました）---
+# --- Stage0 入力（既定値）---
 - name: subscriptionAliasName
   type: string
   default: "cr_subscription_test_99"
@@ -37,18 +44,23 @@ parameters:
   type: boolean
   default: false          # true で plan のみ
 
+stages:
 # =========================================================
 # Stage0: Subscription
 # =========================================================
-stages:
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
   jobs:
   - job: run_tf
     displayName: "Terraform apply (subscription)"
-    pool:
-      vmImage: 'ubuntu-latest'
     steps:
+    # (任意) どのエージェントで走っているか確認
+    - powershell: |
+        Write-Host "Agent Name: $env:AGENT_NAME"
+        Write-Host "Agent OS:   $env:AGENT_OS"
+        Write-Host "Agent Pool: $env:AGENT_POOL"
+      displayName: "Show Agent Info"
+
     # 0) Terraform インストール（無ければ）
     - task: Bash@3
       displayName: 'Install Terraform if missing'
@@ -58,11 +70,11 @@ stages:
           set -e
           if ! command -v terraform >/dev/null 2>&1; then
             echo "Terraform not found. Installing..."
-            sudo apt-get update -y
-            sudo apt-get install -y gnupg software-properties-common curl
-            curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-            sudo apt-get update -y && sudo apt-get install -y terraform
+            sudo apt-get update -y || true
+            sudo apt-get install -y gnupg software-properties-common curl || true
+            curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg || true
+            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list || true
+            sudo apt-get update -y && sudo apt-get install -y terraform || true
           fi
           terraform -version
 
@@ -71,7 +83,7 @@ stages:
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       inputs:
-        azureSubscription: 'snp-pipeline-api'   # ← さっき作った Service connection
+        azureSubscription: 'snp-pipeline-api'   # ← 作成済みの Service connection
         scriptType: bash
         scriptLocation: inlineScript
         workingDirectory: $(Build.SourcesDirectory)/terraform/stage0-subscription
