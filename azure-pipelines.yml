@@ -9,7 +9,7 @@ variables:
   - name: System.Debug
     value: 'true'
 
-# パラメータは YAML 側には持たせず、値は terraform.tfvars で管理
+# 値は terraform/stage0-subscription/terraform.tfvars で管理
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
@@ -39,9 +39,11 @@ stages:
         script: |
           $ErrorActionPreference = 'Stop'
           $stageDir = "$(Build.SourcesDirectory)/terraform/stage0-subscription"
-          $tfvars   = "$(Build.SourcesDirectory)/terraform/terraform.tfvars"
+          $tfvars   = "$(Build.SourcesDirectory)/terraform/stage0-subscription/terraform.tfvars"
 
           if (-not (Test-Path $tfvars)) {
+            Write-Host "Repo root:" $(Build.SourcesDirectory)
+            Get-ChildItem -Recurse "$(Build.SourcesDirectory)/terraform" | Select-Object FullName
             Write-Error "terraform.tfvars が見つかりません: $tfvars"
           }
 
@@ -64,5 +66,66 @@ stages:
 
           Pop-Location
 
-# 以降の Stage1〜 は、あなたの RG/VNet/Subnet の PowerShell 版と同じ要領でOK
-# 必要になったらこの subscriptionId を参照して az account set するなど実装してください。
+# =========================================================
+# Stage1〜4: 以前のプレースホルダーに戻す
+# =========================================================
+
+# Stage1: Resource Group
+- stage: stage1_rg
+  displayName: "Stage1 - Resource Group"
+  dependsOn: stage0_subscription
+  variables:
+    subscriptionId: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  jobs:
+  - job: placeholder_rg
+    steps:
+    - task: AzureCLI@2
+      displayName: "[RG] placeholder"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          echo "[RG] placeholder"
+          echo "SubscriptionId from Stage0: $(subscriptionId)"
+          if [ -n "$(subscriptionId)" ]; then
+            az account set --subscription "$(subscriptionId)"
+            az account show --query "{id:id,name:name}" -o tsv || true
+          fi
+
+# Stage2: VNet
+- stage: stage2_vnet
+  displayName: "Stage2 - VNet"
+  dependsOn: stage1_rg
+  jobs:
+  - job: placeholder_vnet
+    steps:
+    - bash: echo "[VNET] placeholder"
+
+# Stage3: Subnet
+- stage: stage3_subnet
+  displayName: "Stage3 - Subnet"
+  dependsOn: stage2_vnet
+  jobs:
+  - job: placeholder_subnet
+    steps:
+    - bash: echo "[SUBNET] placeholder"
+
+# Stage4a: Peering Spoke->Hub
+- stage: stage4a_peering_s2h
+  displayName: "Stage4a - Peering Spoke->Hub"
+  dependsOn: stage3_subnet
+  jobs:
+  - job: placeholder_peering_s2h
+    steps:
+    - bash: echo "[PEERING S->H] placeholder"
+
+# Stage4b: Peering Hub->Spoke
+- stage: stage4b_peering_h2s
+  displayName: "Stage4b - Peering Hub->Spoke"
+  dependsOn: stage4a_peering_s2h
+  jobs:
+  - job: placeholder_peering_h2s
+    steps:
+    - bash: echo "[PEERING H->S] placeholder"
