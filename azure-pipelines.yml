@@ -1,1 +1,108 @@
+# subscription-api / azure-pipelines.yml
+name: $(Date:yyyyMMdd)$(Rev:.r)
+trigger: none
+pr: none
+
+# ---- 将来、Function から渡す想定のパラメータ
+parameters:
+- name: env
+  displayName: Environment
+  type: string
+  default: dev
+- name: location
+  displayName: Azure Region
+  type: string
+  default: canadacentral
+- name: displayName
+  type: string
+  default: "sub-xxx-dev"
+- name: aliasName
+  type: string
+  default: "sub-xxx-dev"
+- name: mgId
+  type: string
+  default: ""
+- name: billingScope
+  type: string
+  default: ""
+- name: planOnly
+  type: boolean
+  default: false
+# どのステージを走らせるか（今は subscription だけ true）
+- name: runStages
+  type: object
+  default:
+    subscription: true
+    rg:          false
+    vnet:        false
+    subnet:      false
+    peering_s2h: false  # spoke -> hub
+    peering_h2s: false  # hub   -> spoke
+
+# ---- Stage 0: Subscription（まずはここだけ使う）
+stages:
+- stage: stage0_subscription
+  displayName: "Stage0 - Subscription"
+  condition: and(succeeded(), eq('${{ parameters.runStages.subscription }}', 'true'))
+  jobs:
+  - job: placeholder_subscription
+    displayName: "Subscription: placeholder"
+    steps:
+    - script: |
+        echo "[SUBSCRIPTION] env=$(env) location=$(location)"
+        echo "displayName=$(displayName) aliasName=$(aliasName)"
+        echo "mgId=$(mgId) billingScope=$(billingScope) planOnly=$(planOnly)"
+      env:
+        env: ${{ parameters.env }}
+        location: ${{ parameters.location }}
+        displayName: ${{ parameters.displayName }}
+        aliasName: ${{ parameters.aliasName }}
+        mgId: ${{ parameters.mgId }}
+        billingScope: ${{ parameters.billingScope }}
+        planOnly: ${{ parameters.planOnly }}
+
+# ---- Stage 1: RG
+- stage: stage1_rg
+  displayName: "Stage1 - Resource Group"
+  condition: and(succeeded(), eq('${{ parameters.runStages.rg }}', 'true'))
+  jobs:
+  - job: placeholder_rg
+    steps:
+    - script: echo "[RG] placeholder (terraform/ stage1-rg)"
+
+# ---- Stage 2: VNet
+- stage: stage2_vnet
+  displayName: "Stage2 - VNet"
+  condition: and(succeeded(), eq('${{ parameters.runStages.vnet }}', 'true'))
+  jobs:
+  - job: placeholder_vnet
+    steps:
+    - script: echo "[VNET] placeholder (terraform/ stage2-vnet)"
+
+# ---- Stage 3: Subnet
+- stage: stage3_subnet
+  displayName: "Stage3 - Subnet"
+  condition: and(succeeded(), eq('${{ parameters.runStages.subnet }}', 'true'))
+  jobs:
+  - job: placeholder_subnet
+    steps:
+    - script: echo "[SUBNET] placeholder (terraform/ stage3-subnet)"
+
+# ---- Stage 4a: Peering Spoke -> Hub
+- stage: stage4a_peering_s2h
+  displayName: "Stage4a - Peering Spoke->Hub"
+  condition: and(succeeded(), eq('${{ parameters.runStages.peering_s2h }}', 'true'))
+  jobs:
+  - job: placeholder_peering_s2h
+    steps:
+    - script: echo "[PEERING S->H] placeholder (terraform/ stage4a-peering-spoke-to-hub)"
+
+# ---- Stage 4b: Peering Hub -> Spoke
+- stage: stage4b_peering_h2s
+  displayName: "Stage4b - Peering Hub->Spoke"
+  condition: and(succeeded(), eq('${{ parameters.runStages.peering_h2s }}', 'true'))
+  jobs:
+  - job: placeholder_peering_h2s
+    steps:
+    - script: echo "[PEERING H->S] placeholder (terraform/ stage4b-peering-hub-to-spoke)"
 
