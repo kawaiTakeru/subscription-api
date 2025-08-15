@@ -9,7 +9,6 @@ variables:
   - name: System.Debug
     value: 'true'
 
-# 値は terraform/stage0-subscription/terraform.tfvars で管理
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
@@ -26,17 +25,15 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    - task: PowerShell@2
+    # ← AzureCLI@2 で Service connection によりログイン
+    - task: AzureCLI@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
-      env:
-        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
-        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
-        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
-        ARM_TENANT_ID: $(ARM_TENANT_ID)
       inputs:
-        targetType: 'inline'
-        script: |
+        azureSubscription: 'snp-pipeline-api'        # ← 作成済みサービス接続名
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
           $ErrorActionPreference = 'Stop'
           $stageDir = "$(Build.SourcesDirectory)/terraform/stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)/terraform/stage0-subscription/terraform.tfvars"
@@ -67,7 +64,7 @@ stages:
           Pop-Location
 
 # =========================================================
-# Stage1〜4: 以前のプレースホルダーに戻す
+# Stage1〜4: プレースホルダー
 # =========================================================
 
 # Stage1: Resource Group
