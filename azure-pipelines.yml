@@ -43,11 +43,11 @@ stages:
           $spName  = ($sp | ConvertFrom-Json).displayName
 
           Write-Host "== Service Connection WHOAMI =="
-          Write-Host "tenantId   : $tenantId"
-          Write-Host "subscription: $subName ($subId)"
-          Write-Host "clientId   : $clientId"
-          Write-Host "spObjectId : $spObjId"
-          Write-Host "spName     : $spName"
+          Write-Host ("tenantId   : {0}" -f $tenantId)
+          Write-Host ("subscription: {0} ({1})" -f $subName, $subId)
+          Write-Host ("clientId   : {0}" -f $clientId)
+          Write-Host ("spObjectId : {0}" -f $spObjId)
+          Write-Host ("spName     : {0}" -f $spName)
 
           Write-Host "`n== 現在のSPに付いているロール (全スコープ) =="
           az role assignment list --assignee $spObjId --all -o table
@@ -68,7 +68,7 @@ stages:
           if (-not (Test-Path $tfvars)) {
             Write-Host "Repo root:" $(Build.SourcesDirectory)
             Get-ChildItem -Recurse "$(Build.SourcesDirectory)/terraform" | Select-Object FullName
-            Write-Error "terraform.tfvars が見つかりません: $tfvars"
+            throw ("terraform.tfvars が見つかりません: {0}" -f $tfvars)
           }
 
           Push-Location $stageDir
@@ -88,12 +88,18 @@ stages:
 
           # もし state にまだ出ていなければフォールバック (Alias -> subscriptionId)
           if (-not $subId) {
-            # tfvars から alias 名と API バージョンを抽出
+            # tfvars から alias 名を抽出（ダブルクォートを含む行でも安全）
             $aliasName = ""
-            $match = Select-String -Path $tfvars -Pattern '^\s*subscription_alias_name\s*=\s*"(.*)"' | Select-Object -First 1
-            if ($match) { $aliasName = $match.Matches[0].Groups[1].Value }
+            try {
+              $line = (Get-Content -LiteralPath $tfvars | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1)
+              if ($line) {
+                $aliasName = $line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1'
+              }
+            } catch {
+              $aliasName = ""
+            }
 
-            if (-not $aliasName) {
+            if ([string]::IsNullOrWhiteSpace($aliasName)) {
               Write-Warning "subscription_alias_name が tfvars から取得できませんでした。フォールバックをスキップします。"
             } else {
               $aliasId = "/providers/Microsoft.Subscription/aliases/$aliasName"
@@ -103,7 +109,7 @@ stages:
               $max = 10
               for ($i=1; $i -le $max -and (-not $subId); $i++) {
                 try {
-                  $resp = az rest --method GET --url "https://management.azure.com$aliasId?api-version=$api" | ConvertFrom-Json
+                  $resp = az rest --method GET --url ("https://management.azure.com{0}?api-version={1}" -f $aliasId, $api) | ConvertFrom-Json
                   $subId = $resp.properties.subscriptionId
                 } catch {
                   # ignore and retry
@@ -113,8 +119,8 @@ stages:
             }
           }
 
-          Write-Host "subscriptionId=$subId"
-          Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+          Write-Host ("subscriptionId={0}" -f $subId)
+          Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]{0}" -f $subId)
 
           Pop-Location
 
