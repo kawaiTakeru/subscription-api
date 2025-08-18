@@ -173,13 +173,16 @@ stages:
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
   dependsOn: stage0_subscription
-  variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
-  condition: and(succeeded('stage0_subscription'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
+  condition: succeeded('stage0_subscription')
   jobs:
   - job: apply_rg
     displayName: "RG作成"
+    # ← ここで Stage0 の出力を受ける
+    variables:
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+      subscriptionAlias:        $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionAlias'] ]
+    # 実行ガードは job 側で
+    condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
         $sub = "$(subscriptionIdFromStage0)"
@@ -214,12 +217,13 @@ stages:
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
-  variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-  condition: and(succeeded('stage1_rg'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
+  condition: succeeded('stage1_rg')
   jobs:
   - job: apply_vnet
     displayName: "VNet作成"
+    variables:
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+    condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
         $sub = "$(subscriptionIdFromStage0)"
@@ -253,12 +257,13 @@ stages:
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
-  variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-  condition: and(succeeded('stage2_vnet'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
+  condition: succeeded('stage2_vnet')
   jobs:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
+    variables:
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+    condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
         $sub = "$(subscriptionIdFromStage0)"
