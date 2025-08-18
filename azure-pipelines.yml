@@ -84,7 +84,8 @@ stages:
             $api = "2021-10-01"
             try {
               $url = "https://management.azure.com$aliasId?api-version=$api"
-              $resp = az rest --method GET --url $url --only-show-errors | ConvertFrom-Json
+              # IMPORTANT: quote the URL so '?api-version=...' isn't split
+              $resp = az rest --method GET --url "$url" --only-show-errors | ConvertFrom-Json
               if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
                 return [string]$resp.properties.subscriptionId
               }
