@@ -25,11 +25,11 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # 実際にどの SP でログインしているか確認
+    # ← どの Service Principal でログインしているかを特定
     - task: AzureCLI@2
       displayName: "WHOAMI (Service Connection 実体確認)"
       inputs:
-        azureSubscription: 'snp-pipeline-api'
+        azureSubscription: 'snp-pipeline-api'   # ← 既存のサービス接続名
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
@@ -52,12 +52,12 @@ stages:
           Write-Host "`n== 現在のSPに付いているロール (全スコープ) =="
           az role assignment list --assignee $spObjId --all -o table
 
-    # Terraform 実行（AzAPI でサブスクリプション作成）
+    # ← AzureCLI@2 で Service connection によりログインし、Terraform 実行
     - task: AzureCLI@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       inputs:
-        azureSubscription: 'snp-pipeline-api'
+        azureSubscription: 'snp-pipeline-api'        # ← 作成済みサービス接続名
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
@@ -65,7 +65,38 @@ stages:
           $stageDir = "$(Build.SourcesDirectory)/terraform/stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)/terraform/stage0-subscription/terraform.tfvars"
 
-          if (-not (Test-Path $tfvars)) {
+          function Get-AliasNameFromTfvars([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path)) { return "" }
+            try {
+              $line = (Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1)
+              if ($line) {
+                return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1')
+              }
+            } catch {}
+            return ""
+          }
+
+          function Get-SubIdFromAlias([string]$AliasName) {
+            if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
+            $aliasId = "/providers/Microsoft.Subscription/aliases/$AliasName"
+            $api = "2021-10-01"
+            $subIdLocal = ""
+            $max = 10
+            for ($i=1; $i -le $max -and (-not $subIdLocal); $i++) {
+              try {
+                $resp = az rest --method GET --url ("https://management.azure.com{0}?api-version={1}" -f $aliasId, $api) | ConvertFrom-Json
+                if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
+                  $subIdLocal = [string]$resp.properties.subscriptionId
+                }
+              } catch {
+                # ignore and retry
+              }
+              if (-not $subIdLocal) { Start-Sleep -Seconds 3 }
+            }
+            return $subIdLocal
+          }
+
+          if (-not (Test-Path -LiteralPath $tfvars)) {
             Write-Host "Repo root:" $(Build.SourcesDirectory)
             Get-ChildItem -Recurse "$(Build.SourcesDirectory)/terraform" | Select-Object FullName
             throw ("terraform.tfvars が見つかりません: {0}" -f $tfvars)
@@ -82,44 +113,18 @@ stages:
           Write-Host "== terraform apply =="
           terraform apply -auto-approve plan.out
 
-          # まずは Terraform の output を試みる
+          # --- Output 取得 ---
           $subId = ""
           try { $subId = terraform output -raw subscription_id } catch {}
 
-          # もし state にまだ出ていなければフォールバック (Alias -> subscriptionId)
           if (-not $subId) {
-            # tfvars から alias 名を抽出
-            $aliasName = ""
-            try {
-              $line = (Get-Content -LiteralPath $tfvars | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1)
-              if ($line) {
-                $aliasName = $line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1'
-              }
-            } catch {
-              $aliasName = ""
-            }
-
+            $aliasName = Get-AliasNameFromTfvars -Path $tfvars
             if ([string]::IsNullOrWhiteSpace($aliasName)) {
               Write-Warning "subscription_alias_name が tfvars から取得できませんでした。フォールバックをスキップします。"
             } else {
-              $aliasId = "/providers/Microsoft.Subscription/aliases/$aliasName"
-              $api = "2021-10-01"
-
-              # 反映待ちのためリトライ（最大10回、3秒間隔）
-              $max = 10
-              for ($i=1; $i -le $max -and (-not $subId); $i++) {
-                try {
-                  $resp = az rest --method GET --url ("https://management.azure.com{0}?api-version={1}" -f $aliasId, $api) | ConvertFrom-Json
-                  if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
-                    $subId = [string]$resp.properties.subscriptionId
-                  }
-                } catch {
-                  # ignore and retry
-                }
-                if (-not $subId) { Start-Sleep -Seconds 3 }
-              }
+              $subId = Get-SubIdFromAlias -AliasName $aliasName
             }
-          } # ← ここで if (-not $subId) を閉じる
+          }
 
           Write-Host ("subscriptionId={0}" -f $subId)
           Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]{0}" -f $subId)
