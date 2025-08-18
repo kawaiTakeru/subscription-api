@@ -82,9 +82,37 @@ stages:
           Write-Host "== terraform apply =="
           terraform apply -auto-approve plan.out
 
-          # 出力を次ステージへ渡す
+          # まずは Terraform の output を試みる
           $subId = ""
           try { $subId = terraform output -raw subscription_id } catch {}
+
+          # もし state にまだ出ていなければフォールバック (Alias -> subscriptionId)
+          if (-not $subId) {
+            # tfvars から alias 名と API バージョンを抽出
+            $aliasName = ""
+            $match = Select-String -Path $tfvars -Pattern '^\s*subscription_alias_name\s*=\s*"(.*)"' | Select-Object -First 1
+            if ($match) { $aliasName = $match.Matches[0].Groups[1].Value }
+
+            if (-not $aliasName) {
+              Write-Warning "subscription_alias_name が tfvars から取得できませんでした。フォールバックをスキップします。"
+            } else {
+              $aliasId = "/providers/Microsoft.Subscription/aliases/$aliasName"
+              $api = "2021-10-01"
+
+              # 反映待ちのためリトライ（最大10回、3秒間隔）
+              $max = 10
+              for ($i=1; $i -le $max -and (-not $subId); $i++) {
+                try {
+                  $resp = az rest --method GET --url "https://management.azure.com$aliasId?api-version=$api" | ConvertFrom-Json
+                  $subId = $resp.properties.subscriptionId
+                } catch {
+                  # ignore and retry
+                }
+                if (-not $subId) { Start-Sleep -Seconds 3 }
+              }
+            }
+          }
+
           Write-Host "subscriptionId=$subId"
           Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
 
