@@ -134,7 +134,6 @@ stages:
           terraform init
 
           $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
-          # ▼▼ PowerShell では || は使えない → $LASTEXITCODE で判定
           terraform import -no-color azapi_resource.subscription $rid 2>$null
           if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped." }
 
@@ -152,116 +151,61 @@ stages:
           if ($subId) {
             Write-Host ("subscriptionId=" + $subId)
             Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $subId)
+            Write-Host "✅ Resolved subscriptionId: $subId"
           } else {
-            Write-Warning "subscriptionId not resolved in Stage0. Stage1 will retry."
+            Write-Warning "subscriptionId not resolved in Stage0."
             Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]")
           }
 
 # =========================================================
-# Stage1〜4: 下流
+# Stage1〜4: 下流はまだ placeholder
 # =========================================================
 - stage: stage1_rg
-  displayName: "Stage1 - Resource Group"
+  displayName: "Stage1 - Resource Group (placeholder)"
   dependsOn: stage0_subscription
-  variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
   condition: succeeded()
   jobs:
   - job: placeholder_rg
     steps:
-    - task: AzureCLI@2
-      name: resolve
-      displayName: "[RG] resolve subscriptionId if empty (max 5m)"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference = 'Stop'
-          $subId  = '$(subscriptionIdFromStage0)'
-          $alias  = '$(subscriptionAlias)'
-
-          if (-not $subId -and $alias) {
-            $deadline = (Get-Date).AddMinutes(5)
-            do {
-              $subId = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
-              if ($LASTEXITCODE -eq 0 -and $subId) { $subId = $subId.Trim() }
-              if (-not $subId) { Start-Sleep -Seconds 10 }
-            } while (-not $subId -and (Get-Date) -lt $deadline)
-          }
-
-          if ($subId) {
-            Write-Host "Resolved subscriptionId: $subId"
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
-          } else {
-            Write-Warning "subscriptionId still not resolved."
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
-          }
-
-    - task: AzureCLI@2
+    - script: echo "[RG] placeholder. SubscriptionId=$(subscriptionId)"
       displayName: "[RG] placeholder"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: bash
-        scriptLocation: inlineScript
-        inlineScript: |
-          set -e
-          echo "[RG] placeholder"
-          echo "SubscriptionId from Stage1: $(subscriptionId)"
-          if [ -n "$(subscriptionId)" ]; then
-            az account set --subscription "$(subscriptionId)"
-            az account show --query "{id:id,name:name}" -o tsv || true
-          fi
 
 - stage: stage2_vnet
-  displayName: "Stage2 - VNet"
+  displayName: "Stage2 - VNet (placeholder)"
   dependsOn: stage1_rg
-  variables:
-    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
-  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
+  condition: succeeded()
   jobs:
   - job: placeholder_vnet
     steps:
-    - bash: |
-        echo "[VNET] placeholder"
-        echo "SubscriptionId: $(subscriptionId)"
+    - script: echo "[VNET] placeholder. SubscriptionId=$(subscriptionId)"
+      displayName: "[VNET] placeholder"
 
 - stage: stage3_subnet
-  displayName: "Stage3 - Subnet"
+  displayName: "Stage3 - Subnet (placeholder)"
   dependsOn: stage2_vnet
-  variables:
-    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
-  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
+  condition: succeeded()
   jobs:
   - job: placeholder_subnet
     steps:
-    - bash: |
-        echo "[SUBNET] placeholder"
-        echo "SubscriptionId: $(subscriptionId)"
+    - script: echo "[SUBNET] placeholder. SubscriptionId=$(subscriptionId)"
+      displayName: "[SUBNET] placeholder"
 
 - stage: stage4a_peering_s2h
-  displayName: "Stage4a - Peering Spoke->Hub"
+  displayName: "Stage4a - Peering Spoke->Hub (placeholder)"
   dependsOn: stage3_subnet
-  variables:
-    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
-  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
+  condition: succeeded()
   jobs:
   - job: placeholder_peering_s2h
     steps:
-    - bash: |
-        echo "[PEERING S->H] placeholder"
-        echo "SubscriptionId: $(subscriptionId)"
+    - script: echo "[PEERING S->H] placeholder. SubscriptionId=$(subscriptionId)"
+      displayName: "[PEERING S->H] placeholder"
 
 - stage: stage4b_peering_h2s
-  displayName: "Stage4b - Peering Hub->Spoke"
+  displayName: "Stage4b - Peering Hub->Spoke (placeholder)"
   dependsOn: stage4a_peering_s2h
-  variables:
-    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
-  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
+  condition: succeeded()
   jobs:
   - job: placeholder_peering_h2s
     steps:
-    - bash: |
-        echo "[PEERING H->S] placeholder"
-        echo "SubscriptionId: $(subscriptionId)"
+    - script: echo "[PEERING H->S] placeholder. SubscriptionId=$(subscriptionId)"
+      displayName: "[PEERING H->S] placeholder"
