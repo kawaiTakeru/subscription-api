@@ -64,6 +64,9 @@ stages:
         inlineScript: |
           $ErrorActionPreference = 'Stop'
 
+          # Enforce TLS 1.2 for Invoke-RestMethod on older PowerShell
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
           $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
 
@@ -82,10 +85,13 @@ stages:
             if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
             $aliasId = "/providers/Microsoft.Subscription/aliases/$AliasName"
             $api = "2021-10-01"
+            $url = "https://management.azure.com$aliasId?api-version=$api"
             try {
-              $url = "https://management.azure.com$aliasId?api-version=$api"
-              # IMPORTANT: quote the URL so '?api-version=...' isn't split
-              $resp = az rest --method GET --url "$url" --only-show-errors | ConvertFrom-Json
+              # Get token for ARM
+              $token = az account get-access-token --resource https://management.azure.com --query accessToken -o tsv
+              if (-not $token) { return "" }
+              $headers = @{ Authorization = "Bearer $token" }
+              $resp = Invoke-RestMethod -Method GET -Uri $url -Headers $headers -ErrorAction Stop
               if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
                 return [string]$resp.properties.subscriptionId
               }
