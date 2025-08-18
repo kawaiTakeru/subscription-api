@@ -118,13 +118,14 @@ stages:
             throw "subscription_alias_name is empty in tfvars. Set it first."
           }
 
-          # 次段でも参照できるよう alias を出力
-          Write-Host ("##vso[task.setvariable variable=subscriptionAlias;isOutput=true]" + $aliasName)
+          # 次段でも参照できるよう alias を出力（右辺ベタ置きで確実化）
+          Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
           # まず alias 存在チェック
           $existingSubId = Get-SubIdViaAz -AliasName $aliasName
           if ($existingSubId) {
             Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
+
             # (任意) state 同期したい場合のみ import を「失敗許容」で実施
             try {
               Set-Location $stageDir
@@ -138,8 +139,8 @@ stages:
               Set-Location "$(Build.SourcesDirectory)"
             }
 
-            Write-Host ("subscriptionId=" + $existingSubId)
-            Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $existingSubId)
+            Write-Host "subscriptionId=$existingSubId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
             Write-Host "✅ Resolved subscriptionId (existing): $existingSubId"
             return
           }
@@ -163,29 +164,31 @@ stages:
           }
 
           if ($subId) {
-            Write-Host ("subscriptionId=" + $subId)
-            Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $subId)
+            Write-Host "subscriptionId=$subId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
             Write-Host "✅ Resolved subscriptionId (created): $subId"
           } else {
             Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
-            Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]")
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
           }
 
 # =========================================================
-# Stage1〜4: 下流（いまは実行しない・プレースホルダのみ）
-# すべて条件で停止する（subscriptionId が空 or 前段失敗）
+# Stage1〜4: 下流（subscriptionId が空なら停止）
 # =========================================================
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
   dependsOn: stage0_subscription
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
-  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+    subscriptionAlias:        $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionAlias'] ]
+  condition: and(succeeded('stage0_subscription'), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
   - job: apply_rg
     displayName: "RG作成"
     steps:
+    - powershell: |
+        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
+      displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage1 RG)"
       inputs:
@@ -210,9 +213,9 @@ stages:
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
-  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], '')) # 依存成功 & subIdあり
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+  condition: and(succeeded('stage1_rg'), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
   - job: apply_vnet
     displayName: "VNet作成"
@@ -241,9 +244,9 @@ stages:
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
-  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], ''))
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+  condition: and(succeeded('stage2_vnet'), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
