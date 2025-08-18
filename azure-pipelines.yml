@@ -12,6 +12,9 @@ variables:
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
+#   - まず Terraform の output を試す
+#   - 出なければ "最大 6 分" だけ alias を輪読して取得
+#   - 取得できなくても alias を後段に渡し、Stage1で最長5分だけ補完解決
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -85,29 +88,28 @@ stages:
             try {
               $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
               if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-            } catch {
-              # ignore
-            }
+            } catch {}
             try {
               $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
               $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
               if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-            } catch {
-              # ignore
-            }
+            } catch {}
             return ""
           }
 
           function Wait-SubscriptionReady([string]$AliasName, [int]$MaxSeconds, [int]$IntervalSeconds) {
-            $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+            # できるだけ account alias API を優先（速い）
             $deadline = (Get-Date).AddSeconds($MaxSeconds)
             while ((Get-Date) -lt $deadline) {
               try {
-                $subId = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
-                if ($LASTEXITCODE -eq 0 -and $subId) { return $subId.Trim() }
-              } catch {
-                # ignore and retry
-              }
+                $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              } catch {}
+              try {
+                $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+                $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              } catch {}
               Start-Sleep -Seconds $IntervalSeconds
             }
             return ""
@@ -124,6 +126,10 @@ stages:
             throw "subscription_alias_name is empty in tfvars. Set it first."
           }
 
+          # 後段で補完できるよう alias を常に出力しておく
+          Write-Host ("##vso[task.setvariable variable=subscriptionAlias;isOutput=true]" + $aliasName)
+
+          # 既存 alias の場合は Terraform をスキップ（高速化）
           $existingSubId = Get-SubIdViaAz -AliasName $aliasName
           if ($existingSubId) {
             Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
@@ -151,40 +157,76 @@ stages:
             Write-Host "== terraform apply =="
             terraform apply -auto-approve plan.out
 
+            # 1) Terraform output をまず試す（出るなら即終了できる）
             $subId = ""
-            try {
-              $subId = terraform output -raw subscription_id
-            } catch {
-              Write-Host "terraform output not yet available: $($_.Exception.Message)"
-            }
+            try { $subId = terraform output -raw subscription_id } catch {}
 
+            # 2) 出なければ "最大 6 分" だけ待って取得（短縮）
             if (-not $subId) {
-              $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 900 -IntervalSeconds 15
+              $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 360 -IntervalSeconds 10
             }
 
-            if (-not $subId) {
-              throw "subscriptionId could not be resolved after creation."
+            # 3) ここで取れなければ Stage1 で補完解決（エラーにしない）
+            if ($subId) {
+              Write-Host ("subscriptionId=" + $subId)
+              Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $subId)
+            } else {
+              Write-Warning "subscriptionId not resolved in Stage0 (within 6m). It will be resolved in Stage1."
+              Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]")
             }
-
-            Write-Host ("subscriptionId=" + $subId)
-            Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $subId)
           } finally {
             Pop-Location
           }
 
 # =========================================================
-# Stage1〜4: Placeholders
+# Stage1〜4: 下流。Stage1 冒頭で subscriptionId を最長 5 分だけ補完解決。
+# 以降の Stage は Stage1 の出力 subscriptionId を参照。
 # =========================================================
 
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
   dependsOn: stage0_subscription
   variables:
-    subscriptionId: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
+    # Stage0 出力を受け取る（空の場合あり）
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
+  condition: succeeded()
   jobs:
   - job: placeholder_rg
     steps:
+    # --- 補完解決（最大 5 分） ---
+    - task: AzureCLI@2
+      name: resolve
+      displayName: "[RG] resolve subscriptionId if empty (max 5m)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          $subId  = '$(subscriptionIdFromStage0)'
+          $alias  = '$(subscriptionAlias)'
+
+          if (-not $subId -and $alias) {
+            $deadline = (Get-Date).AddMinutes(5)
+            do {
+              try {
+                $subId = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $subId) { $subId = $subId.Trim() }
+              } catch {}
+              if (-not $subId) { Start-Sleep -Seconds 10 }
+            } while (-not $subId -and (Get-Date) -lt $deadline)
+          }
+
+          if ($subId) {
+            Write-Host "Resolved subscriptionId: $subId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+          } else {
+            Write-Warning "subscriptionId still not resolved; downstream steps should guard accordingly."
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+          }
+
+    # --- 以降は解決済みIDを使って実演 ---
     - task: AzureCLI@2
       displayName: "[RG] placeholder"
       inputs:
@@ -194,40 +236,61 @@ stages:
         inlineScript: |
           set -e
           echo "[RG] placeholder"
-          echo "SubscriptionId from Stage0: $(subscriptionId)"
+          echo "SubscriptionId from Stage1: $(subscriptionId)"
           if [ -n "$(subscriptionId)" ]; then
             az account set --subscription "$(subscriptionId)"
             az account show --query "{id:id,name:name}" -o tsv || true
           fi
 
+# 以降の Stage は Stage1 出力を参照
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
+  variables:
+    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
   jobs:
   - job: placeholder_vnet
     steps:
-    - bash: echo "[VNET] placeholder"
+    - bash: |
+        echo "[VNET] placeholder"
+        echo "SubscriptionId: $(subscriptionId)"
 
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
+  variables:
+    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
   jobs:
   - job: placeholder_subnet
     steps:
-    - bash: echo "[SUBNET] placeholder"
+    - bash: |
+        echo "[SUBNET] placeholder"
+        echo "SubscriptionId: $(subscriptionId)"
 
 - stage: stage4a_peering_s2h
   displayName: "Stage4a - Peering Spoke->Hub"
   dependsOn: stage3_subnet
+  variables:
+    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
   jobs:
   - job: placeholder_peering_s2h
     steps:
-    - bash: echo "[PEERING S->H] placeholder"
+    - bash: |
+        echo "[PEERING S->H] placeholder"
+        echo "SubscriptionId: $(subscriptionId)"
 
 - stage: stage4b_peering_h2s
   displayName: "Stage4b - Peering Hub->Spoke"
   dependsOn: stage4a_peering_s2h
+  variables:
+    subscriptionId: $[ stageDependencies.stage1_rg.placeholder_rg.outputs['resolve.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
   jobs:
   - job: placeholder_peering_h2s
     steps:
-    - bash: echo "[PEERING H->S] placeholder"
+    - bash: |
+        echo "[PEERING H->S] placeholder"
+        echo "SubscriptionId: $(subscriptionId)"
