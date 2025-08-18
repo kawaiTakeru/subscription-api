@@ -12,9 +12,6 @@ variables:
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
-#   - Terraform output を試す
-#   - 出なければ "最大 6 分" 輪読
-#   - 出なくても alias を次段に渡す
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -110,17 +107,15 @@ stages:
             return ""
           }
 
-          if (-not (Test-Path -LiteralPath $tfvars)) {
-            throw ("terraform.tfvars not found: " + $tfvars)
-          }
+          if (-not (Test-Path -LiteralPath $tfvars)) { throw ("terraform.tfvars not found: " + $tfvars) }
 
           $aliasName = Get-AliasNameFromTfvars -Path $tfvars
-          if ([string]::IsNullOrWhiteSpace($aliasName)) {
-            throw "subscription_alias_name is empty in tfvars. Set it first."
-          }
+          if ([string]::IsNullOrWhiteSpace($aliasName)) { throw "subscription_alias_name is empty in tfvars. Set it first." }
 
+          # 次段でも参照できるよう alias を出力
           Write-Host ("##vso[task.setvariable variable=subscriptionAlias;isOutput=true]" + $aliasName)
 
+          # 既存 alias ならスキップ
           $existingSubId = Get-SubIdViaAz -AliasName $aliasName
           if ($existingSubId) {
             Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
@@ -137,12 +132,17 @@ stages:
 
           Set-Location $stageDir
           terraform init
+
           $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
-          terraform import -no-color azapi_resource.subscription $rid 2>$null || Write-Host "terraform import skipped."
+          # ▼▼ PowerShell では || は使えない → $LASTEXITCODE で判定
+          terraform import -no-color azapi_resource.subscription $rid 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped." }
+
           terraform plan -var-file="$tfvars" -out plan.out
           terraform apply -auto-approve plan.out
           Set-Location $orig
 
+          # output → 取得できなければ 6 分輪読
           $subId = ""
           try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
           if (-not $subId) {
@@ -158,7 +158,7 @@ stages:
           }
 
 # =========================================================
-# Stage1〜4: 下流。Stage1 冒頭で subscriptionId を補完解決。
+# Stage1〜4: 下流
 # =========================================================
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
@@ -214,7 +214,6 @@ stages:
             az account show --query "{id:id,name:name}" -o tsv || true
           fi
 
-# 以降 Stage2〜4
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
