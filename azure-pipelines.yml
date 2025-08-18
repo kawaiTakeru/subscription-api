@@ -178,7 +178,7 @@ stages:
   - job: apply_rg
     displayName: "RG作成"
     variables:
-      # 修正: <stage>.<job>.outputs['<step>.<var>']
+      # <stage>.<job>.outputs['<step>.<var>']
       subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
       subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
@@ -211,8 +211,10 @@ stages:
 # =========================================================
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
-  dependsOn: stage1_rg
-  condition: succeeded('stage1_rg')
+  dependsOn:
+  - stage0_subscription      # ← 追加
+  - stage1_rg                # 既存
+  condition: and(succeeded('stage1_rg'), succeeded('stage0_subscription'))
   jobs:
   - job: apply_vnet
     displayName: "VNet作成"
@@ -240,14 +242,15 @@ stages:
             terraform apply -auto-approve -no-color
           } finally { Pop-Location }
 
-
 # =========================================================
 # Stage3: Subnet + NSG + 関連付け
 # =========================================================
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
-  dependsOn: stage2_vnet
-  condition: succeeded('stage2_vnet')
+  dependsOn:
+  - stage0_subscription      # ← 追加
+  - stage2_vnet              # 既存
+  condition: and(succeeded('stage2_vnet'), succeeded('stage0_subscription'))
   jobs:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
@@ -274,4 +277,3 @@ stages:
             terraform init -no-color
             terraform apply -auto-approve -no-color
           } finally { Pop-Location }
-
