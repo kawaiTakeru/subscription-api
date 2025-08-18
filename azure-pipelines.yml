@@ -12,6 +12,8 @@ variables:
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
+#   - alias があれば apply せずに subscriptionId を取得
+#   - alias がなければ Terraform で alias 作成 → subscriptionId を取得
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -107,39 +109,51 @@ stages:
             return ""
           }
 
-          if (-not (Test-Path -LiteralPath $tfvars)) { throw ("terraform.tfvars not found: " + $tfvars) }
+          if (-not (Test-Path -LiteralPath $tfvars)) {
+            throw ("terraform.tfvars not found: " + $tfvars)
+          }
 
           $aliasName = Get-AliasNameFromTfvars -Path $tfvars
-          if ([string]::IsNullOrWhiteSpace($aliasName)) { throw "subscription_alias_name is empty in tfvars. Set it first." }
+          if ([string]::IsNullOrWhiteSpace($aliasName)) {
+            throw "subscription_alias_name is empty in tfvars. Set it first."
+          }
 
           # 次段でも参照できるよう alias を出力
           Write-Host ("##vso[task.setvariable variable=subscriptionAlias;isOutput=true]" + $aliasName)
 
-          # 既存 alias ならスキップ
+          # まず alias 存在チェック
           $existingSubId = Get-SubIdViaAz -AliasName $aliasName
           if ($existingSubId) {
             Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
+            # (任意) state 同期したい場合のみ import を「失敗許容」で実施
+            try {
+              Set-Location $stageDir
+              terraform init
+              $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
+              terraform import -no-color azapi_resource.subscription $rid 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
+            } catch {
+              Write-Host "terraform import failed but ignored."
+            } finally {
+              Set-Location "$(Build.SourcesDirectory)"
+            }
+
             Write-Host ("subscriptionId=" + $existingSubId)
             Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $existingSubId)
+            Write-Host "✅ Resolved subscriptionId (existing): $existingSubId"
             return
           }
 
+          # === alias が無ければ作成 ===
           $orig = Get-Location
-          trap {
+          try {
+            Set-Location $stageDir
+            terraform init
+            terraform plan -var-file="$tfvars" -out plan.out
+            terraform apply -auto-approve plan.out
+          } finally {
             Set-Location $orig
-            throw
           }
-
-          Set-Location $stageDir
-          terraform init
-
-          $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
-          terraform import -no-color azapi_resource.subscription $rid 2>$null
-          if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped." }
-
-          terraform plan -var-file="$tfvars" -out plan.out
-          terraform apply -auto-approve plan.out
-          Set-Location $orig
 
           # output → 取得できなければ 6 分輪読
           $subId = ""
@@ -151,61 +165,68 @@ stages:
           if ($subId) {
             Write-Host ("subscriptionId=" + $subId)
             Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]" + $subId)
-            Write-Host "✅ Resolved subscriptionId: $subId"
+            Write-Host "✅ Resolved subscriptionId (created): $subId"
           } else {
-            Write-Warning "subscriptionId not resolved in Stage0."
+            Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
             Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]")
           }
 
 # =========================================================
-# Stage1〜4: 下流はまだ placeholder
+# Stage1〜4: 下流（いまは実行しない・プレースホルダのみ）
+# すべて条件で停止する（subscriptionId が空 or 前段失敗）
 # =========================================================
 - stage: stage1_rg
-  displayName: "Stage1 - Resource Group (placeholder)"
+  displayName: "Stage1 - Resource Group"
   dependsOn: stage0_subscription
-  condition: succeeded()
+  variables:
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
+  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], 'RUN_LATER')) # 実行しないガード
   jobs:
   - job: placeholder_rg
     steps:
-    - script: echo "[RG] placeholder. SubscriptionId=$(subscriptionId)"
+    - powershell: |
+        Write-Host "[RG] placeholder (not executed now)"
+        Write-Host "subscriptionIdFromStage0: $(subscriptionIdFromStage0)"
+        Write-Host "subscriptionAlias:        $(subscriptionAlias)"
       displayName: "[RG] placeholder"
 
 - stage: stage2_vnet
-  displayName: "Stage2 - VNet (placeholder)"
+  displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
-  condition: succeeded()
+  condition: false
   jobs:
   - job: placeholder_vnet
     steps:
-    - script: echo "[VNET] placeholder. SubscriptionId=$(subscriptionId)"
-      displayName: "[VNET] placeholder"
+    - powershell: |
+        Write-Host "[VNET] placeholder"
 
 - stage: stage3_subnet
-  displayName: "Stage3 - Subnet (placeholder)"
+  displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
-  condition: succeeded()
+  condition: false
   jobs:
   - job: placeholder_subnet
     steps:
-    - script: echo "[SUBNET] placeholder. SubscriptionId=$(subscriptionId)"
-      displayName: "[SUBNET] placeholder"
+    - powershell: |
+        Write-Host "[SUBNET] placeholder"
 
 - stage: stage4a_peering_s2h
-  displayName: "Stage4a - Peering Spoke->Hub (placeholder)"
+  displayName: "Stage4a - Peering Spoke->Hub"
   dependsOn: stage3_subnet
-  condition: succeeded()
+  condition: false
   jobs:
   - job: placeholder_peering_s2h
     steps:
-    - script: echo "[PEERING S->H] placeholder. SubscriptionId=$(subscriptionId)"
-      displayName: "[PEERING S->H] placeholder"
+    - powershell: |
+        Write-Host "[PEERING S->H] placeholder"
 
 - stage: stage4b_peering_h2s
-  displayName: "Stage4b - Peering Hub->Spoke (placeholder)"
+  displayName: "Stage4b - Peering Hub->Spoke"
   dependsOn: stage4a_peering_s2h
-  condition: succeeded()
+  condition: false
   jobs:
   - job: placeholder_peering_h2s
     steps:
-    - script: echo "[PEERING H->S] placeholder. SubscriptionId=$(subscriptionId)"
-      displayName: "[PEERING H->S] placeholder"
+    - powershell: |
+        Write-Host "[PEERING H->S] placeholder"
