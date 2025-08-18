@@ -12,8 +12,6 @@ variables:
 stages:
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
-#   - alias があれば apply せずに subscriptionId を取得
-#   - alias がなければ Terraform で alias 作成 → subscriptionId を取得
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
@@ -118,15 +116,14 @@ stages:
             throw "subscription_alias_name is empty in tfvars. Set it first."
           }
 
-          # 次段でも参照できるよう alias を出力（右辺ベタ置きで確実化）
+          # 出力変数（右辺ベタ置きで確実化）
           Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
-          # まず alias 存在チェック
+          # 既存 alias チェック
           $existingSubId = Get-SubIdViaAz -AliasName $aliasName
           if ($existingSubId) {
             Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
 
-            # (任意) state 同期したい場合のみ import を「失敗許容」で実施
             try {
               Set-Location $stageDir
               terraform init
@@ -141,11 +138,10 @@ stages:
 
             Write-Host "subscriptionId=$existingSubId"
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
-            Write-Host "✅ Resolved subscriptionId (existing): $existingSubId"
             return
           }
 
-          # === alias が無ければ作成 ===
+          # 新規作成
           $orig = Get-Location
           try {
             Set-Location $stageDir
@@ -156,7 +152,7 @@ stages:
             Set-Location $orig
           }
 
-          # output → 取得できなければ 6 分輪読
+          # output or wait
           $subId = ""
           try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
           if (-not $subId) {
@@ -166,28 +162,30 @@ stages:
           if ($subId) {
             Write-Host "subscriptionId=$subId"
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
-            Write-Host "✅ Resolved subscriptionId (created): $subId"
           } else {
             Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
           }
 
 # =========================================================
-# Stage1〜4: 下流（subscriptionId が空なら停止）
+# Stage1: Resource Group
 # =========================================================
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
   dependsOn: stage0_subscription
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
-    subscriptionAlias:        $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionAlias'] ]
-  condition: and(succeeded('stage0_subscription'), ne(variables['subscriptionIdFromStage0'], ''))
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
+  condition: and(succeeded('stage0_subscription'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
   jobs:
   - job: apply_rg
     displayName: "RG作成"
     steps:
     - powershell: |
-        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
+        $sub = "$(subscriptionIdFromStage0)"
+        if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
+        Write-Host "subscriptionIdFromStage0=$sub"
+        Write-Host "subscriptionAlias=$(subscriptionAlias)"
       displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage1 RG)"
@@ -210,16 +208,24 @@ stages:
             Pop-Location
           }
 
+# =========================================================
+# Stage2: VNet
+# =========================================================
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
-  condition: and(succeeded('stage1_rg'), ne(variables['subscriptionIdFromStage0'], ''))
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  condition: and(succeeded('stage1_rg'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
   jobs:
   - job: apply_vnet
     displayName: "VNet作成"
     steps:
+    - powershell: |
+        $sub = "$(subscriptionIdFromStage0)"
+        if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
+        Write-Host "subscriptionIdFromStage0=$sub"
+      displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage2 VNet)"
       inputs:
@@ -241,16 +247,24 @@ stages:
             Pop-Location
           }
 
+# =========================================================
+# Stage3: Subnet + NSG + 関連付け
+# =========================================================
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
   variables:
-    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
-  condition: and(succeeded('stage2_vnet'), ne(variables['subscriptionIdFromStage0'], ''))
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  condition: and(succeeded('stage2_vnet'), ne(stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'], ''))
   jobs:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
     steps:
+    - powershell: |
+        $sub = "$(subscriptionIdFromStage0)"
+        if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
+        Write-Host "subscriptionIdFromStage0=$sub"
+      displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage3 Subnet)"
       inputs:
