@@ -127,9 +127,9 @@ stages:
             }
           }
 
-          Write-Host "subscriptionId=$subId"
-          # 出力変数（ブレースを含めない安全な形）
-          Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+          # ログ & 出力変数（ダブルクォート非使用で安全に出力）
+          Write-Host ('subscriptionId=' + $subId)
+          Write-Host ('##vso[task.setvariable variable=subscriptionId;isOutput=true]' + $subId)
 
           Pop-Location
 
