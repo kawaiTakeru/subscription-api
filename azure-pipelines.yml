@@ -25,7 +25,34 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # ← AzureCLI@2 で Service connection によりログイン
+    # ← どの Service Principal でログインしているかを特定
+    - task: AzureCLI@2
+      displayName: "WHOAMI (Service Connection 実体確認)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'   # ← 既存のサービス接続名
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $clientId = az account show --query user.name -o tsv
+          $tenantId = az account show --query tenantId -o tsv
+          $subName  = az account show --query name -o tsv
+          $subId    = az account show --query id -o tsv
+
+          $sp      = az ad sp show --id $clientId --only-show-errors
+          $spObjId = ($sp | ConvertFrom-Json).id
+          $spName  = ($sp | ConvertFrom-Json).displayName
+
+          Write-Host "== Service Connection WHOAMI =="
+          Write-Host "tenantId   : $tenantId"
+          Write-Host "subscription: $subName ($subId)"
+          Write-Host "clientId   : $clientId"
+          Write-Host "spObjectId : $spObjId"
+          Write-Host "spName     : $spName"
+
+          Write-Host "`n== 現在のSPに付いているロール (全スコープ) =="
+          az role assignment list --assignee $spObjId --all -o table
+
+    # ← AzureCLI@2 で Service connection によりログインし、Terraform 実行
     - task: AzureCLI@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
