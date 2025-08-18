@@ -172,8 +172,7 @@ stages:
           }
 
 # =========================================================
-# Stage1〜4: 下流（いまは実行しない・プレースホルダのみ）
-# すべて条件で停止する（subscriptionId が空 or 前段失敗）
+# Stage1〜4: 下流（Stage0 の subscriptionId が空なら停止）
 # =========================================================
 - stage: stage1_rg
   displayName: "Stage1 - Resource Group"
@@ -186,6 +185,10 @@ stages:
   - job: apply_rg
     displayName: "RG作成"
     steps:
+    - powershell: |
+        Write-Host "subscriptionIdFromStage0 = $(subscriptionIdFromStage0)"
+      displayName: "Echo subId (debug)"
+
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage1 RG)"
       inputs:
@@ -210,13 +213,18 @@ stages:
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
-  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], '')) # 依存成功 & subIdあり
   variables:
+    # Stage2 でも Stage0 の出力を直接参照
     subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
   - job: apply_vnet
     displayName: "VNet作成"
     steps:
+    - powershell: |
+        Write-Host "subscriptionIdFromStage0 = $(subscriptionIdFromStage0)"
+      displayName: "Echo subId (debug)"
+
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage2 VNet)"
       inputs:
@@ -241,13 +249,17 @@ stages:
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
-  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], ''))
   variables:
     subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
     steps:
+    - powershell: |
+        Write-Host "subscriptionIdFromStage0 = $(subscriptionIdFromStage0)"
+      displayName: "Echo subId (debug)"
+
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage3 Subnet)"
       inputs:
