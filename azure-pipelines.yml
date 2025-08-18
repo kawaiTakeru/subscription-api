@@ -25,11 +25,11 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # ← どの Service Principal でログインしているかを特定
+    # Identify which Service Principal is used by the service connection
     - task: AzureCLI@2
-      displayName: "WHOAMI (Service Connection 実体確認)"
+      displayName: "WHOAMI (service connection identity)"
       inputs:
-        azureSubscription: 'snp-pipeline-api'   # ← 既存のサービス接続名
+        azureSubscription: 'snp-pipeline-api'
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
@@ -43,23 +43,22 @@ stages:
           $spObjId = $spJson.id
           $spName  = $spJson.displayName
 
-          Write-Host "== Service Connection WHOAMI =="
-          Write-Host "tenantId   : $tenantId"
+          Write-Host "== Service Connection =="
+          Write-Host "tenantId    : $tenantId"
           Write-Host "subscription: $subName ($subId)"
-          Write-Host "clientId   : $clientId"
-          Write-Host "spObjectId : $spObjId"
-          Write-Host "spName     : $spName"
-
+          Write-Host "clientId    : $clientId"
+          Write-Host "spObjectId  : $spObjId"
+          Write-Host "spName      : $spName"
           Write-Host ""
-          Write-Host "== 現在のSPに付いているロール (全スコープ) =="
+          Write-Host "== Current role assignments for this SP (all scopes) =="
           az role assignment list --assignee $spObjId --all -o table
 
-    # ← AzureCLI@2 で Service connection によりログインし、Terraform 実行
+    # Run Terraform under the same service connection
     - task: AzureCLI@2
       name: tf
       displayName: 'Terraform init/plan/apply (Stage0)'
       inputs:
-        azureSubscription: 'snp-pipeline-api'        # ← 作成済みサービス接続名
+        azureSubscription: 'snp-pipeline-api'
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
@@ -83,58 +82,73 @@ stages:
             if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
             $aliasId = "/providers/Microsoft.Subscription/aliases/$AliasName"
             $api = "2021-10-01"
-            $subIdLocal = ""
-            for ($i=1; $i -le 10 -and (-not $subIdLocal); $i++) {
-              try {
-                $url = "https://management.azure.com$aliasId?api-version=$api"
-                $resp = az rest --method GET --url $url | ConvertFrom-Json
-                if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
-                  $subIdLocal = [string]$resp.properties.subscriptionId
-                }
-              } catch {}
-              if (-not $subIdLocal) { Start-Sleep -Seconds 3 }
+            try {
+              $url = "https://management.azure.com$aliasId?api-version=$api"
+              $resp = az rest --method GET --url $url --only-show-errors | ConvertFrom-Json
+              if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
+                return [string]$resp.properties.subscriptionId
+              }
+            } catch {
+              # 404 => not found => treat as non-existing
             }
-            return $subIdLocal
+            return ""
           }
 
           if (-not (Test-Path -LiteralPath $tfvars)) {
             Write-Host "Repo root: $(Build.SourcesDirectory)"
             Get-ChildItem -Recurse "$(Build.SourcesDirectory)\terraform" | Select-Object FullName
-            throw "terraform.tfvars が見つかりません: $tfvars"
+            throw ("terraform.tfvars not found: " + $tfvars)
+          }
+
+          $aliasName = Get-AliasNameFromTfvars -Path $tfvars
+          if ([string]::IsNullOrWhiteSpace($aliasName)) {
+            throw "subscription_alias_name is empty in tfvars. Set it first."
+          }
+
+          # ---- Pre-check: if alias already exists, skip Terraform and output subscriptionId ----
+          $existingSubId = Get-SubIdFromAlias -AliasName $aliasName
+          if ($existingSubId) {
+            Write-Host ("Alias already exists. Skip Terraform. alias=" + $aliasName + " subId=" + $existingSubId)
+            Write-Host ('subscriptionId=' + $existingSubId)
+            Write-Host ('##vso[task.setvariable variable=subscriptionId;isOutput=true]' + $existingSubId)
+            exit 0
           }
 
           Push-Location $stageDir
+          try {
+            Write-Host "== terraform init =="
+            terraform init
 
-          Write-Host "== terraform init =="
-          terraform init
+            Write-Host "== terraform plan =="
+            terraform plan -var-file="$tfvars" -out plan.out
 
-          Write-Host "== terraform plan =="
-          terraform plan -var-file="$tfvars" -out plan.out
+            Write-Host "== terraform apply =="
+            terraform apply -auto-approve plan.out
 
-          Write-Host "== terraform apply =="
-          terraform apply -auto-approve plan.out
+            # --- Read output or fallback to GET alias ---
+            $subId = ""
+            try { $subId = terraform output -raw subscription_id } catch {}
 
-          # --- Output 取得 ---
-          $subId = ""
-          try { $subId = terraform output -raw subscription_id } catch {}
-
-          if (-not $subId) {
-            $aliasName = Get-AliasNameFromTfvars -Path $tfvars
-            if ([string]::IsNullOrWhiteSpace($aliasName)) {
-              Write-Warning "subscription_alias_name が tfvars から取得できませんでした。フォールバックをスキップします。"
-            } else {
-              $subId = Get-SubIdFromAlias -AliasName $aliasName
+            if (-not $subId) {
+              for ($i=1; $i -le 10 -and (-not $subId); $i++) {
+                Start-Sleep -Seconds 3
+                $subId = Get-SubIdFromAlias -AliasName $aliasName
+              }
             }
+
+            if (-not $subId) {
+              throw "subscriptionId could not be resolved after creation."
+            }
+
+            Write-Host ('subscriptionId=' + $subId)
+            Write-Host ('##vso[task.setvariable variable=subscriptionId;isOutput=true]' + $subId)
+          }
+          finally {
+            Pop-Location
           }
 
-          # ログ & 出力変数（ダブルクォート非使用で安全に出力）
-          Write-Host ('subscriptionId=' + $subId)
-          Write-Host ('##vso[task.setvariable variable=subscriptionId;isOutput=true]' + $subId)
-
-          Pop-Location
-
 # =========================================================
-# Stage1〜4: プレースホルダー
+# Stage1〜4: Placeholders
 # =========================================================
 
 # Stage1: Resource Group
@@ -143,6 +157,7 @@ stages:
   dependsOn: stage0_subscription
   variables:
     subscriptionId: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+  condition: and(succeeded(), ne(variables['subscriptionId'], ''))
   jobs:
   - job: placeholder_rg
     steps:
