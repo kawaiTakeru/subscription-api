@@ -177,11 +177,10 @@ stages:
   jobs:
   - job: apply_rg
     displayName: "RG作成"
-    # ← ここで Stage0 の出力を受ける
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
-      subscriptionAlias:        $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionAlias'] ]
-    # 実行ガードは job 側で
+      # 修正: <stage>.<job>.outputs['<step>.<var>']
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+      subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
@@ -200,16 +199,12 @@ stages:
           $ErrorActionPreference = 'Stop'
           az account set --subscription "$(subscriptionIdFromStage0)"
           Write-Host "Using subscription: $(subscriptionIdFromStage0)"
-
           $env:ARM_USE_AZCLI_AUTH = "true"
-
           Push-Location "$(Build.SourcesDirectory)\terraform\stage1-rg"
           try {
             terraform init -no-color
             terraform apply -auto-approve -no-color
-          } finally {
-            Pop-Location
-          }
+          } finally { Pop-Location }
 
 # =========================================================
 # Stage2: VNet
@@ -222,13 +217,11 @@ stages:
   - job: apply_vnet
     displayName: "VNet作成"
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
-        $sub = "$(subscriptionIdFromStage0)"
-        if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
-        Write-Host "subscriptionIdFromStage0=$sub"
+        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
       displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage2 VNet)"
@@ -240,16 +233,13 @@ stages:
           $ErrorActionPreference = 'Stop'
           az account set --subscription "$(subscriptionIdFromStage0)"
           Write-Host "Using subscription: $(subscriptionIdFromStage0)"
-
           $env:ARM_USE_AZCLI_AUTH = "true"
-
           Push-Location "$(Build.SourcesDirectory)\terraform\stage2-vnet"
           try {
             terraform init -no-color
             terraform apply -auto-approve -no-color
-          } finally {
-            Pop-Location
-          }
+          } finally { Pop-Location }
+
 
 # =========================================================
 # Stage3: Subnet + NSG + 関連付け
@@ -262,13 +252,11 @@ stages:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.outputs['run_tf.tf.subscriptionId'] ]
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - powershell: |
-        $sub = "$(subscriptionIdFromStage0)"
-        if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
-        Write-Host "subscriptionIdFromStage0=$sub"
+        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
       displayName: "Echo subId (debug)"
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage3 Subnet)"
@@ -280,13 +268,10 @@ stages:
           $ErrorActionPreference = 'Stop'
           az account set --subscription "$(subscriptionIdFromStage0)"
           Write-Host "Using subscription: $(subscriptionIdFromStage0)"
-
           $env:ARM_USE_AZCLI_AUTH = "true"
-
           Push-Location "$(Build.SourcesDirectory)\terraform\stage3-subnet"
           try {
             terraform init -no-color
             terraform apply -auto-approve -no-color
-          } finally {
-            Pop-Location
-          }
+          } finally { Pop-Location }
+
