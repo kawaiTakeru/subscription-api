@@ -7,7 +7,7 @@ terraform {
   required_version = ">= 1.4.0"
   required_providers {
     azapi = {
-      source  = "Azure/azapi"
+      source  = "azure/azapi"   # ← 'Azure' ではなく 'azure'
       version = "~> 1.0"
     }
     azurerm = {
@@ -21,8 +21,14 @@ terraform {
   }
 }
 
+# --- プロバイダは Azure CLI 認証を強制 ---
 provider "azurerm" {
   features {}
+  use_cli = true
+}
+
+provider "azapi" {
+  use_cli = true
 }
 
 # ===== Optional: Billing 読取チェック（権限が無ければ明示的に失敗）=====
@@ -52,9 +58,11 @@ resource "azapi_resource" "subscription" {
 
   body = jsonencode({
     properties = {
-      displayName  = var.subscription_display_name
-      billingScope = local.billing_scope
-      workload     = var.subscription_workload   # "Production" | "DevTest"
+      displayName       = var.subscription_display_name
+      billingScope      = local.billing_scope
+      workload          = var.subscription_workload   # "Production" | "DevTest"
+      # 最上位MG配下に直置きしたい場合は下の1行を有効化（変数化 or 直書きどちらでも）
+      # managementGroupId = "/providers/Microsoft.Management/managementGroups/2b72ff53-757a-41b9-aa8f-7056292c626e"
     }
   })
 
