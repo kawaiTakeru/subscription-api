@@ -1,2 +1,2 @@
-rg_name  = "rg-from-pipeline-api"
+rg_name  = "rg-from-pipeline"
 location = "japaneast"
