@@ -39,17 +39,19 @@ stages:
           $subId    = az account show --query id -o tsv
 
           $sp      = az ad sp show --id $clientId --only-show-errors
-          $spObjId = ($sp | ConvertFrom-Json).id
-          $spName  = ($sp | ConvertFrom-Json).displayName
+          $spJson  = $sp | ConvertFrom-Json
+          $spObjId = $spJson.id
+          $spName  = $spJson.displayName
 
           Write-Host "== Service Connection WHOAMI =="
-          Write-Host ("tenantId   : {0}" -f $tenantId)
-          Write-Host ("subscription: {0} ({1})" -f $subName, $subId)
-          Write-Host ("clientId   : {0}" -f $clientId)
-          Write-Host ("spObjectId : {0}" -f $spObjId)
-          Write-Host ("spName     : {0}" -f $spName)
+          Write-Host "tenantId   : $tenantId"
+          Write-Host "subscription: $subName ($subId)"
+          Write-Host "clientId   : $clientId"
+          Write-Host "spObjectId : $spObjId"
+          Write-Host "spName     : $spName"
 
-          Write-Host "`n== 現在のSPに付いているロール (全スコープ) =="
+          Write-Host ""
+          Write-Host "== 現在のSPに付いているロール (全スコープ) =="
           az role assignment list --assignee $spObjId --all -o table
 
     # ← AzureCLI@2 で Service connection によりログインし、Terraform 実行
@@ -62,13 +64,14 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
-          $stageDir = "$(Build.SourcesDirectory)/terraform/stage0-subscription"
-          $tfvars   = "$(Build.SourcesDirectory)/terraform/stage0-subscription/terraform.tfvars"
+
+          $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
+          $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
 
           function Get-AliasNameFromTfvars([string]$Path) {
             if (-not (Test-Path -LiteralPath $Path)) { return "" }
             try {
-              $line = (Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1)
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1
               if ($line) {
                 return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1')
               }
@@ -81,25 +84,23 @@ stages:
             $aliasId = "/providers/Microsoft.Subscription/aliases/$AliasName"
             $api = "2021-10-01"
             $subIdLocal = ""
-            $max = 10
-            for ($i=1; $i -le $max -and (-not $subIdLocal); $i++) {
+            for ($i=1; $i -le 10 -and (-not $subIdLocal); $i++) {
               try {
-                $resp = az rest --method GET --url ("https://management.azure.com{0}?api-version={1}" -f $aliasId, $api) | ConvertFrom-Json
+                $url = "https://management.azure.com$aliasId?api-version=$api"
+                $resp = az rest --method GET --url $url | ConvertFrom-Json
                 if ($resp -and $resp.properties -and $resp.properties.subscriptionId) {
                   $subIdLocal = [string]$resp.properties.subscriptionId
                 }
-              } catch {
-                # ignore and retry
-              }
+              } catch {}
               if (-not $subIdLocal) { Start-Sleep -Seconds 3 }
             }
             return $subIdLocal
           }
 
           if (-not (Test-Path -LiteralPath $tfvars)) {
-            Write-Host "Repo root:" $(Build.SourcesDirectory)
-            Get-ChildItem -Recurse "$(Build.SourcesDirectory)/terraform" | Select-Object FullName
-            throw ("terraform.tfvars が見つかりません: {0}" -f $tfvars)
+            Write-Host "Repo root: $(Build.SourcesDirectory)"
+            Get-ChildItem -Recurse "$(Build.SourcesDirectory)\terraform" | Select-Object FullName
+            throw "terraform.tfvars が見つかりません: $tfvars"
           }
 
           Push-Location $stageDir
@@ -126,8 +127,9 @@ stages:
             }
           }
 
-          Write-Host ("subscriptionId={0}" -f $subId)
-          Write-Host ("##vso[task.setvariable variable=subscriptionId;isOutput=true]{0}" -f $subId)
+          Write-Host "subscriptionId=$subId"
+          # 出力変数（ブレースを含めない安全な形）
+          Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
 
           Pop-Location
 
