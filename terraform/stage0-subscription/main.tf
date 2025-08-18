@@ -25,7 +25,7 @@ provider "azurerm" {
   features {}
 }
 
-# ===== Optional: Billing 読取チェック（権限が無ければ明示的に失敗）=====
+# ===== Optional: Billing 読取チェック =====
 data "azapi_resource_list" "billing_accounts" {
   type                   = "Microsoft.Billing/billingAccounts@2020-05-01"
   parent_id              = "/"
@@ -73,10 +73,8 @@ data "azapi_resource" "subscription_get" {
   name      = azapi_resource.subscription.name
   parent_id = "/"
 
-  # 明示的に subscriptionId をエクスポート
   response_export_values = ["properties.subscriptionId"]
 
-  # 作成が完了してから GET することを保証
   depends_on = [azapi_resource.subscription]
 }
 
