@@ -181,52 +181,90 @@ stages:
   variables:
     subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
-  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], 'RUN_LATER')) # 実行しないガード
+  condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
   jobs:
-  - job: placeholder_rg
+  - job: apply_rg
+    displayName: "RG作成"
     steps:
-    - powershell: |
-        Write-Host "[RG] placeholder (not executed now)"
-        Write-Host "subscriptionIdFromStage0: $(subscriptionIdFromStage0)"
-        Write-Host "subscriptionAlias:        $(subscriptionAlias)"
-      displayName: "[RG] placeholder"
+    - task: AzureCLI@2
+      displayName: "Terraform apply (Stage1 RG)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          az account set --subscription "$(subscriptionIdFromStage0)"
+          Write-Host "Using subscription: $(subscriptionIdFromStage0)"
+
+          $env:ARM_USE_AZCLI_AUTH = "true"
+
+          Push-Location "$(Build.SourcesDirectory)\terraform\stage1-rg"
+          try {
+            terraform init -no-color
+            terraform apply -auto-approve -no-color
+          } finally {
+            Pop-Location
+          }
 
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn: stage1_rg
-  condition: false
+  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], '')) # 依存成功 & subIdあり
+  variables:
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
   jobs:
-  - job: placeholder_vnet
+  - job: apply_vnet
+    displayName: "VNet作成"
     steps:
-    - powershell: |
-        Write-Host "[VNET] placeholder"
+    - task: AzureCLI@2
+      displayName: "Terraform apply (Stage2 VNet)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          az account set --subscription "$(subscriptionIdFromStage0)"
+          Write-Host "Using subscription: $(subscriptionIdFromStage0)"
+
+          $env:ARM_USE_AZCLI_AUTH = "true"
+
+          Push-Location "$(Build.SourcesDirectory)\terraform\stage2-vnet"
+          try {
+            terraform init -no-color
+            terraform apply -auto-approve -no-color
+          } finally {
+            Pop-Location
+          }
 
 - stage: stage3_subnet
   displayName: "Stage3 - Subnet"
   dependsOn: stage2_vnet
-  condition: false
+  condition: and(succeeded(), ne(stageDependencies.stage1_rg.outputs['subscriptionIdFromStage0'], ''))
+  variables:
+    subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
   jobs:
-  - job: placeholder_subnet
+  - job: apply_subnet
+    displayName: "Subnet + NSG + 関連付け"
     steps:
-    - powershell: |
-        Write-Host "[SUBNET] placeholder"
+    - task: AzureCLI@2
+      displayName: "Terraform apply (Stage3 Subnet)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          az account set --subscription "$(subscriptionIdFromStage0)"
+          Write-Host "Using subscription: $(subscriptionIdFromStage0)"
 
-- stage: stage4a_peering_s2h
-  displayName: "Stage4a - Peering Spoke->Hub"
-  dependsOn: stage3_subnet
-  condition: false
-  jobs:
-  - job: placeholder_peering_s2h
-    steps:
-    - powershell: |
-        Write-Host "[PEERING S->H] placeholder"
+          $env:ARM_USE_AZCLI_AUTH = "true"
 
-- stage: stage4b_peering_h2s
-  displayName: "Stage4b - Peering Hub->Spoke"
-  dependsOn: stage4a_peering_s2h
-  condition: false
-  jobs:
-  - job: placeholder_peering_h2s
-    steps:
-    - powershell: |
-        Write-Host "[PEERING H->S] placeholder"
+          Push-Location "$(Build.SourcesDirectory)\terraform\stage3-subnet"
+          try {
+            terraform init -no-color
+            terraform apply -auto-approve -no-color
+          } finally {
+            Pop-Location
+          }
