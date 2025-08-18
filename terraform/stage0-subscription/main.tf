@@ -7,7 +7,7 @@ terraform {
   required_version = ">= 1.4.0"
   required_providers {
     azapi = {
-      source  = "azure/azapi"   # ← 'Azure' ではなく 'azure'
+      source  = "Azure/azapi"
       version = "~> 1.0"
     }
     azurerm = {
@@ -21,14 +21,8 @@ terraform {
   }
 }
 
-# --- プロバイダは Azure CLI 認証を強制 ---
 provider "azurerm" {
   features {}
-  use_cli = true
-}
-
-provider "azapi" {
-  use_cli = true
 }
 
 # ===== Optional: Billing 読取チェック（権限が無ければ明示的に失敗）=====
@@ -58,11 +52,9 @@ resource "azapi_resource" "subscription" {
 
   body = jsonencode({
     properties = {
-      displayName       = var.subscription_display_name
-      billingScope      = local.billing_scope
-      workload          = var.subscription_workload   # "Production" | "DevTest"
-      # 最上位MG配下に直置きしたい場合は下の1行を有効化（変数化 or 直書きどちらでも）
-      # managementGroupId = "/providers/Microsoft.Management/managementGroups/2b72ff53-757a-41b9-aa8f-7056292c626e"
+      displayName  = var.subscription_display_name
+      billingScope = local.billing_scope
+      workload     = var.subscription_workload   # "Production" | "DevTest"
     }
   })
 
@@ -75,10 +67,23 @@ resource "azapi_resource" "subscription" {
   depends_on = [null_resource.check_billing_permission]
 }
 
+# ===== Read Back (GET) to ensure subscriptionId is available =====
+data "azapi_resource" "subscription_get" {
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = azapi_resource.subscription.name
+  parent_id = "/"
+
+  # 明示的に subscriptionId をエクスポート
+  response_export_values = ["properties.subscriptionId"]
+
+  # 作成が完了してから GET することを保証
+  depends_on = [azapi_resource.subscription]
+}
+
 # ===== Outputs =====
 output "subscription_id" {
   description = "Created subscriptionId"
-  value       = try(azapi_resource.subscription.output.properties.subscriptionId, null)
+  value       = try(data.azapi_resource.subscription_get.output.properties.subscriptionId, null)
 }
 
 output "alias_name" {
