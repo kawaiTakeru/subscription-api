@@ -5,7 +5,7 @@ variable "hub_vnet_name" {
 
 variable "hub_rg_name" {
   type        = string
-  description = "Hub Resource Group name"
+  description = "Hub RG name"
 }
 
 variable "spoke_vnet_name" {
