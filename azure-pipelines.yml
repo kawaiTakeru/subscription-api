@@ -207,13 +207,13 @@ stages:
           } finally { Pop-Location }
 
 # =========================================================
-# Stage2: VNet
+# Stage2: VNet  （既存）
 # =========================================================
 - stage: stage2_vnet
   displayName: "Stage2 - VNet"
   dependsOn:
-  - stage0_subscription      # ← 追加
-  - stage1_rg                # 既存
+  - stage0_subscription
+  - stage1_rg
   condition: and(succeeded('stage1_rg'), succeeded('stage0_subscription'))
   jobs:
   - job: apply_vnet
@@ -225,6 +225,7 @@ stages:
     - powershell: |
         Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
       displayName: "Echo subId (debug)"
+
     - task: AzureCLI@2
       displayName: "Terraform apply (Stage2 VNet)"
       inputs:
@@ -241,6 +242,43 @@ stages:
             terraform init -no-color
             terraform apply -auto-approve -no-color
           } finally { Pop-Location }
+
+    # ★追加：state から VNet/RG を抽出して “出力変数” にする
+    - task: AzureCLI@2
+      name: resolve              # ← これが outputs['resolve.xxx'] に効く
+      displayName: "Export Spoke VNet/RG to output variables"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          az account set --subscription "$(subscriptionIdFromStage0)"
+          $dir = "$(Build.SourcesDirectory)\terraform\stage2-vnet"
+          Push-Location $dir
+          try {
+            terraform init -no-color -input=false | Out-Null
+            $json = terraform show -json
+          } finally { Pop-Location }
+
+          if (-not $json) { throw "terraform show -json returned empty." }
+          $obj = $json | ConvertFrom-Json
+          $vnet = $obj.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" } | Select-Object -First 1
+          if (-not $vnet) { throw "No azurerm_virtual_network found in Stage2 state." }
+
+          $spokeVnetName = $vnet.values.name
+          $spokeRgName   = $vnet.values.resource_group_name
+
+          if ([string]::IsNullOrWhiteSpace($spokeVnetName) -or [string]::IsNullOrWhiteSpace($spokeRgName)) {
+            throw "Failed to resolve Spoke VNet/RG."
+          }
+
+          Write-Host "Resolved Spoke: VNet=$spokeVnetName, RG=$spokeRgName"
+
+          # ← これが “ステージ間出力” になる
+          Write-Host "##vso[task.setvariable variable=spokeVnetName;isOutput=true]$spokeVnetName"
+          Write-Host "##vso[task.setvariable variable=spokeRgName;isOutput=true]$spokeRgName"
+
 
 # =========================================================
 # Stage3: Subnet + NSG + 関連付け
@@ -273,150 +311,6 @@ stages:
           Write-Host "Using subscription: $(subscriptionIdFromStage0)"
           $env:ARM_USE_AZCLI_AUTH = "true"
           Push-Location "$(Build.SourcesDirectory)\terraform\stage3-subnet"
-          try {
-            terraform init -no-color
-            terraform apply -auto-approve -no-color
-          } finally { Pop-Location }
-
-# =========================================================
-# Stage4a: Peering Spoke -> Hub
-# =========================================================
-- stage: stage4a_peering_spoke_to_hub
-  displayName: "Stage4a - Peering Spoke → Hub"
-  dependsOn:
-  - stage0_subscription
-  - stage3_subnet
-  condition: and(succeeded('stage3_subnet'), succeeded('stage0_subscription'))
-  jobs:
-  - job: peering_spoke_to_hub
-    displayName: "Spoke → Hub ピアリング作成"
-    variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-    condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
-    steps:
-    - powershell: |
-        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
-      displayName: "Echo subId (debug)"
-
-    # ---- 追加: Stage2 の state から Spoke VNet/RG を取得して TF_VAR_* に注入 ----
-    - task: AzureCLI@2
-      displayName: "Resolve Spoke VNet/RG from Stage2 state"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference = 'Stop'
-          az account set --subscription "$(subscriptionIdFromStage0)"
-          $stage2Dir = "$(Build.SourcesDirectory)\terraform\stage2-vnet"
-          Push-Location $stage2Dir
-          try {
-            terraform init -no-color -input=false | Out-Null
-            $json = terraform show -json
-          } finally { Pop-Location }
-
-          if (-not $json) { throw "terraform show -json returned empty." }
-          $obj = $json | ConvertFrom-Json
-          $resources = $obj.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" }
-          if (-not $resources) { throw "No azurerm_virtual_network found in Stage2 state." }
-
-          # 最初の VNet を採用（複数あれば要件に合わせて絞り込み）
-          $spokeVnetName = $resources[0].values.name
-          $spokeRgName   = $resources[0].values.resource_group_name
-
-          if ([string]::IsNullOrWhiteSpace($spokeVnetName) -or [string]::IsNullOrWhiteSpace($spokeRgName)) {
-            throw "Failed to resolve Spoke VNet name or RG name."
-          }
-
-          Write-Host "Resolved Spoke VNet: $spokeVnetName / RG: $spokeRgName"
-
-          # Terraform が拾えるよう TF_VAR_* をエクスポート
-          Write-Host "##vso[task.setvariable variable=TF_VAR_spoke_vnet_name;isOutput=false]$spokeVnetName"
-          Write-Host "##vso[task.setvariable variable=TF_VAR_spoke_rg_name;isOutput=false]$spokeRgName"
-
-    - task: AzureCLI@2
-      displayName: "Terraform apply (Stage4a Spoke→Hub)"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference = 'Stop'
-          az account set --subscription "$(subscriptionIdFromStage0)"
-          Write-Host "Using subscription (spoke): $(subscriptionIdFromStage0)"
-
-          # ---- 重要：TF_VAR_* を環境変数として注入（前ステップで設定済み）----
-          $env:ARM_USE_AZCLI_AUTH = "true"
-          $env:TF_VAR_spoke_vnet_name = "$(TF_VAR_spoke_vnet_name)"
-          $env:TF_VAR_spoke_rg_name   = "$(TF_VAR_spoke_rg_name)"
-
-          Push-Location "$(Build.SourcesDirectory)\terraform\stage4a-peering-spoke-to-hub"
-          try {
-            terraform init -no-color
-            terraform apply -auto-approve -no-color
-          } finally { Pop-Location }
-
-# =========================================================
-# Stage4b: Peering Hub -> Spoke
-# =========================================================
-- stage: stage4b_peering_hub_to_spoke
-  displayName: "Stage4b - Peering Hub → Spoke"
-  dependsOn:
-  - stage4a_peering_spoke_to_hub
-  condition: succeeded('stage4a_peering_spoke_to_hub')
-  jobs:
-  - job: peering_hub_to_spoke
-    displayName: "Hub → Spoke ピアリング作成"
-    steps:
-    # ---- 4b 側でも再解決（安全のため）。4a の出力を流用してもOK ----
-    - task: AzureCLI@2
-      displayName: "Resolve Spoke VNet/RG from Stage2 state (again)"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference = 'Stop'
-          # spoke 側の state を読むだけなので sub 切替は不要だが、合わせておく
-          # （必要なら Stage0 の subId を受け渡して再利用しても可）
-          # ここでは簡素化のため切替省略
-
-          $stage2Dir = "$(Build.SourcesDirectory)\terraform\stage2-vnet"
-          Push-Location $stage2Dir
-          try {
-            terraform init -no-color -input=false | Out-Null
-            $json = terraform show -json
-          } finally { Pop-Location }
-
-          if (-not $json) { throw "terraform show -json returned empty." }
-          $obj = $json | ConvertFrom-Json
-          $resources = $obj.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" }
-          if (-not $resources) { throw "No azurerm_virtual_network found in Stage2 state." }
-
-          $spokeVnetName = $resources[0].values.name
-          $spokeRgName   = $resources[0].values.resource_group_name
-
-          Write-Host "Resolved Spoke VNet: $spokeVnetName / RG: $spokeRgName"
-          Write-Host "##vso[task.setvariable variable=TF_VAR_spoke_vnet_name;isOutput=false]$spokeVnetName"
-          Write-Host "##vso[task.setvariable variable=TF_VAR_spoke_rg_name;isOutput=false]$spokeRgName"
-
-    - task: AzureCLI@2
-      displayName: "Terraform apply (Stage4b Hub→Spoke)"
-      inputs:
-        azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference = 'Stop'
-          $hubSub = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
-          az account set --subscription $hubSub
-          Write-Host "Using subscription (hub): $hubSub"
-
-          $env:ARM_USE_AZCLI_AUTH = "true"
-          $env:TF_VAR_spoke_vnet_name = "$(TF_VAR_spoke_vnet_name)"
-          $env:TF_VAR_spoke_rg_name   = "$(TF_VAR_spoke_rg_name)"
-
-          Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-hub-to-spoke"
           try {
             terraform init -no-color
             terraform apply -auto-approve -no-color
