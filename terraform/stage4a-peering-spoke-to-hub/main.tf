@@ -1,37 +1,28 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.4.0"
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.100.0"
+      version = "~> 3.100"
     }
   }
 }
 
-provider "azurerm" { features {} } # spoke (current az account)
-
+# spoke 側（AzureCLI ログインで実行中のサブスクリプション）
 provider "azurerm" {
-  alias           = "hub"
-  features        = {}
-  subscription_id = var.hub_subscription_id
+  features {}
 }
 
-data "azurerm_virtual_network" "spoke" {
-  name                = var.spoke_vnet_name
-  resource_group_name = var.spoke_rg_name
-}
-
-data "azurerm_virtual_network" "hub" {
-  provider            = azurerm.hub
-  name                = var.hub_vnet_name
-  resource_group_name = var.hub_rg_name
+# 参照する Hub 側 VNet のリソースIDを組み立てるだけ（別 provider は不要）
+locals {
+  hub_vnet_id = "/subscriptions/${var.hub_subscription_id}/resourceGroups/${var.hub_rg_name}/providers/Microsoft.Network/virtualNetworks/${var.hub_vnet_name}"
 }
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   name                      = "spoke-to-hub"
-  resource_group_name       = data.azurerm_virtual_network.spoke.resource_group_name
-  virtual_network_name      = data.azurerm_virtual_network.spoke.name
-  remote_virtual_network_id = data.azurerm_virtual_network.hub.id
+  resource_group_name       = var.spoke_rg_name
+  virtual_network_name      = var.spoke_vnet_name
+  remote_virtual_network_id = local.hub_vnet_id
 
   allow_forwarded_traffic = true
   allow_gateway_transit   = false
