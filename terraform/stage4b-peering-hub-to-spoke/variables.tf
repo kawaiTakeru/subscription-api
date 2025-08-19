@@ -1,10 +1,10 @@
 variable "spoke_vnet_name" {
-  description = "Spoke VNet name"
+  description = "Spoke VNet name (auto-injected via TF_VAR_spoke_vnet_name)"
   type        = string
 }
 
 variable "spoke_rg_name" {
-  description = "Spoke Resource Group name"
+  description = "Spoke Resource Group name (auto-injected via TF_VAR_spoke_rg_name)"
   type        = string
 }
 
