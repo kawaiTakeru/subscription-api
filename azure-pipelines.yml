@@ -370,12 +370,15 @@ stages:
     - job: peering_hub_to_spoke
       displayName: "Hub → Spoke ピアリング作成"
       variables:
+        # Stage0 の出力 (spoke の Subscription ID)
+        spokeSubIdFromS0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+        # Stage2 の出力 (spoke の VNet/RG 名)
         spokeVnetNameFromS2: $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
         spokeRgNameFromS2:   $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
-      condition: and(succeeded(), ne(variables['spokeVnetNameFromS2'], ''), ne(variables['spokeRgNameFromS2'], ''))
+      condition: and(succeeded(), ne(variables['spokeSubIdFromS0'], ''), ne(variables['spokeVnetNameFromS2'], ''), ne(variables['spokeRgNameFromS2'], ''))
       steps:
         - powershell: |
-            Write-Host "Spoke VNet=$(spokeVnetNameFromS2), RG=$(spokeRgNameFromS2)"
+            Write-Host "Spoke: sub=$(spokeSubIdFromS0) vnet=$(spokeVnetNameFromS2) rg=$(spokeRgNameFromS2)"
           displayName: "Echo spoke (debug)"
 
         - task: AzureCLI@2
@@ -391,8 +394,11 @@ stages:
               Write-Host "Using subscription (hub): $hubSub"
 
               $env:ARM_USE_AZCLI_AUTH = "true"
-              $env:TF_VAR_spoke_vnet_name = "$(spokeVnetNameFromS2)"
-              $env:TF_VAR_spoke_rg_name   = "$(spokeRgNameFromS2)"
+
+              # Spoke 側の3つを TF_VAR で注入
+              $env:TF_VAR_spoke_subscription_id = "$(spokeSubIdFromS0)"
+              $env:TF_VAR_spoke_vnet_name       = "$(spokeVnetNameFromS2)"
+              $env:TF_VAR_spoke_rg_name         = "$(spokeRgNameFromS2)"
 
               Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-hub-to-spoke"
               try {
