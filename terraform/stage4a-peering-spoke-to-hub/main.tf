@@ -8,19 +8,14 @@ terraform {
   }
 }
 
-# Spoke 側（デフォルト）: CLI の現在サブスクリプションを使用
-provider "azurerm" {
-  features {}
-}
+provider "azurerm" { features {} } # spoke (current az account)
 
-# Hub 側: 明示的に別サブスクリプションを指定
 provider "azurerm" {
   alias           = "hub"
   features        = {}
   subscription_id = var.hub_subscription_id
 }
 
-# 既存 VNet を参照
 data "azurerm_virtual_network" "spoke" {
   name                = var.spoke_vnet_name
   resource_group_name = var.spoke_rg_name
@@ -32,7 +27,6 @@ data "azurerm_virtual_network" "hub" {
   resource_group_name = var.hub_rg_name
 }
 
-# Spoke -> Hub ピアリング
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   name                      = "spoke-to-hub"
   resource_group_name       = data.azurerm_virtual_network.spoke.resource_group_name
@@ -43,4 +37,3 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   allow_gateway_transit   = false
   use_remote_gateways     = true
 }
-
