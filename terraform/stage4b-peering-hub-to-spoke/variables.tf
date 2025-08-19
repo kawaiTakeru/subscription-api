@@ -1,24 +1,24 @@
-variable "spoke_vnet_name" {
-  description = "Spoke VNet name (auto-injected via TF_VAR_spoke_vnet_name)"
-  type        = string
-}
-
-variable "spoke_rg_name" {
-  description = "Spoke Resource Group name (auto-injected via TF_VAR_spoke_rg_name)"
-  type        = string
-}
-
 variable "hub_vnet_name" {
-  description = "Hub VNet name"
   type        = string
+  description = "Hub VNet name"
 }
 
 variable "hub_rg_name" {
-  description = "Hub Resource Group name"
   type        = string
+  description = "Hub RG name"
 }
 
-variable "hub_subscription_id" {
-  description = "Hub subscription ID"
+variable "spoke_vnet_name" {
   type        = string
+  description = "Spoke VNet name (from Stage2)"
+}
+
+variable "spoke_rg_name" {
+  type        = string
+  description = "Spoke RG name (from Stage2)"
+}
+
+variable "spoke_subscription_id" {
+  type        = string
+  description = "Spoke subscription ID (from Stage0)"
 }
