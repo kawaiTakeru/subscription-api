@@ -277,3 +277,76 @@ stages:
             terraform init -no-color
             terraform apply -auto-approve -no-color
           } finally { Pop-Location }
+
+# =========================================================
+# Stage4a: Peering Spoke -> Hub
+# =========================================================
+- stage: stage4a_peering_spoke_to_hub
+  displayName: "Stage4a - Peering Spoke → Hub"
+  dependsOn:
+  - stage0_subscription
+  - stage3_subnet
+  condition: and(succeeded('stage3_subnet'), succeeded('stage0_subscription'))
+  jobs:
+  - job: peering_spoke_to_hub
+    displayName: "Spoke → Hub ピアリング作成"
+    variables:
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+    condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
+    steps:
+    - powershell: |
+        Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
+      displayName: "Echo subId (debug)"
+    - task: AzureCLI@2
+      displayName: "Terraform apply (Stage4a Spoke→Hub)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          # Spoke 側で実行（既存の流儀と揃える）
+          az account set --subscription "$(subscriptionIdFromStage0)"
+          Write-Host "Using subscription (spoke): $(subscriptionIdFromStage0)"
+          $env:ARM_USE_AZCLI_AUTH = "true"
+          Push-Location "$(Build.SourcesDirectory)\terraform\stage4a-peering-spoke-to-hub"
+          try {
+            terraform init -no-color
+            terraform apply -auto-approve -no-color
+          } finally { Pop-Location }
+
+# =========================================================
+# Stage4b: Peering Hub -> Spoke
+# =========================================================
+- stage: stage4b_peering_hub_to_spoke
+  displayName: "Stage4b - Peering Hub → Spoke"
+  dependsOn:
+  - stage4a_peering_spoke_to_hub
+  condition: succeeded('stage4a_peering_spoke_to_hub')
+  jobs:
+  - job: peering_hub_to_spoke
+    displayName: "Hub → Spoke ピアリング作成"
+    variables:
+      subscriptionIdFromStage0: $[ stageDependencies.stage4a_peering_spoke_to_hub.peering_spoke_to_hub.outputs[''] ] # 参照は不要だが形式統一用のダミー
+    steps:
+    - powershell: |
+        Write-Host "Hub subscription fixed: 7d1f78e5-bc6c-4018-847f-336ff47b9436"
+      displayName: "Echo hub sub (debug)"
+    - task: AzureCLI@2
+      displayName: "Terraform apply (Stage4b Hub→Spoke)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          # Hub 側へ明示切替（provider alias でも動くが可読性のため）
+          $hubSub = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
+          az account set --subscription $hubSub
+          Write-Host "Using subscription (hub): $hubSub"
+          $env:ARM_USE_AZCLI_AUTH = "true"
+          Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-hub-to-spoke"
+          try {
+            terraform init -no-color
+            terraform apply -auto-approve -no-color
+          } finally { Pop-Location }
