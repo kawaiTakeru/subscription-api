@@ -320,6 +320,7 @@ stages:
   displayName: "Stage4a - Peering Hub → Spoke"
   dependsOn:
     - stage2_vnet
+    - stage0_subscription   # 追加：Stage0 を直接参照
   condition: succeeded('stage2_vnet')
   jobs:
     - job: peering_hub_to_spoke
