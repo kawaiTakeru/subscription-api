@@ -116,7 +116,7 @@ stages:
             throw "subscription_alias_name is empty in tfvars. Set it first."
           }
 
-          # 出力変数（右辺ベタ置きで確実化）
+          # 出力変数
           Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
           # 既存 alias チェック
@@ -314,75 +314,33 @@ stages:
           } finally { Pop-Location }
 
 # =========================================================
-# Stage4a: Spoke -> Hub
+# Stage4a: Hub -> Spoke  （先に Hub 側）
 # =========================================================
-- stage: stage4a_peering_spoke_to_hub
-  displayName: "Stage4a - Peering Spoke → Hub"
-  dependsOn:
-    - stage0_subscription
-    - stage2_vnet
-    - stage3_subnet
-  condition: and(succeeded('stage3_subnet'), succeeded('stage0_subscription'))
-  jobs:
-    - job: peering_spoke_to_hub
-      displayName: "Spoke → Hub ピアリング作成"
-      variables:
-        subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-        spokeVnetNameFromS2: $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
-        spokeRgNameFromS2:   $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
-      condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''), ne(variables['spokeVnetNameFromS2'], ''), ne(variables['spokeRgNameFromS2'], ''))
-      steps:
-        - powershell: |
-            Write-Host "Spoke VNet=$(spokeVnetNameFromS2), RG=$(spokeRgNameFromS2)"
-          displayName: "Echo spoke (debug)"
-
-        - task: AzureCLI@2
-          displayName: "Terraform apply (Stage4a Spoke→Hub)"
-          inputs:
-            azureSubscription: 'snp-pipeline-api'
-            scriptType: ps
-            scriptLocation: inlineScript
-            inlineScript: |
-              $ErrorActionPreference = 'Stop'
-              az account set --subscription "$(subscriptionIdFromStage0)"
-              Write-Host "Using subscription (spoke): $(subscriptionIdFromStage0)"
-
-              $env:ARM_USE_AZCLI_AUTH = "true"
-              $env:TF_VAR_spoke_vnet_name = "$(spokeVnetNameFromS2)"
-              $env:TF_VAR_spoke_rg_name   = "$(spokeRgNameFromS2)"
-
-              Push-Location "$(Build.SourcesDirectory)\terraform\stage4a-peering-spoke-to-hub"
-              try {
-                terraform init -no-color
-                terraform apply -auto-approve -no-color
-              } finally { Pop-Location }
-
-# =========================================================
-# Stage4b: Hub -> Spoke
-# =========================================================
-- stage: stage4b_peering_hub_to_spoke
-  displayName: "Stage4b - Peering Hub → Spoke"
+- stage: stage4a_peering_hub_to_spoke
+  displayName: "Stage4a - Peering Hub → Spoke"
   dependsOn:
     - stage2_vnet
-    - stage4a_peering_spoke_to_hub
-  condition: succeeded('stage4a_peering_spoke_to_hub')
+  condition: succeeded('stage2_vnet')
   jobs:
     - job: peering_hub_to_spoke
       displayName: "Hub → Spoke ピアリング作成"
       variables:
-        # Stage0 の出力 (spoke の Subscription ID)
-        spokeSubIdFromS0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
-        # Stage2 の出力 (spoke の VNet/RG 名)
+        # Stage0: Spoke サブスクリプション ID
+        spokeSubIdFromS0:   $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+        # Stage2: Spoke の VNet/RG 名
         spokeVnetNameFromS2: $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
         spokeRgNameFromS2:   $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
-      condition: and(succeeded(), ne(variables['spokeSubIdFromS0'], ''), ne(variables['spokeVnetNameFromS2'], ''), ne(variables['spokeRgNameFromS2'], ''))
+      condition: and(succeeded(),
+                     ne(variables['spokeSubIdFromS0'], ''),
+                     ne(variables['spokeVnetNameFromS2'], ''),
+                     ne(variables['spokeRgNameFromS2'], ''))
       steps:
         - powershell: |
             Write-Host "Spoke: sub=$(spokeSubIdFromS0) vnet=$(spokeVnetNameFromS2) rg=$(spokeRgNameFromS2)"
           displayName: "Echo spoke (debug)"
 
         - task: AzureCLI@2
-          displayName: "Terraform apply (Stage4b Hub→Spoke)"
+          displayName: "Terraform apply (Stage4a Hub→Spoke)"
           inputs:
             azureSubscription: 'snp-pipeline-api'
             scriptType: ps
@@ -395,12 +353,61 @@ stages:
 
               $env:ARM_USE_AZCLI_AUTH = "true"
 
-              # Spoke 側の3つを TF_VAR で注入
+              # Hub の固定値は terraform/stage4a.../terraform.tfvars に配置済み
+              # Spoke 情報のみ TF_VAR で注入
               $env:TF_VAR_spoke_subscription_id = "$(spokeSubIdFromS0)"
               $env:TF_VAR_spoke_vnet_name       = "$(spokeVnetNameFromS2)"
               $env:TF_VAR_spoke_rg_name         = "$(spokeRgNameFromS2)"
 
-              Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-hub-to-spoke"
+              Push-Location "$(Build.SourcesDirectory)\terraform\stage4a-peering-hub-to-spoke"
+              try {
+                terraform init -no-color
+                terraform apply -auto-approve -no-color
+              } finally { Pop-Location }
+
+# =========================================================
+# Stage4b: Spoke -> Hub  （後で Spoke 側）
+# =========================================================
+- stage: stage4b_peering_spoke_to_hub
+  displayName: "Stage4b - Peering Spoke → Hub"
+  dependsOn:
+    - stage4a_peering_hub_to_spoke
+  condition: succeeded('stage4a_peering_hub_to_spoke')
+  jobs:
+    - job: peering_spoke_to_hub
+      displayName: "Spoke → Hub ピアリング作成"
+      variables:
+        subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+        spokeVnetNameFromS2:      $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
+        spokeRgNameFromS2:        $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
+      condition: and(succeeded(),
+                     ne(variables['subscriptionIdFromStage0'], ''),
+                     ne(variables['spokeVnetNameFromS2'], ''),
+                     ne(variables['spokeRgNameFromS2'], ''))
+      steps:
+        - powershell: |
+            Write-Host "Spoke VNet=$(spokeVnetNameFromS2), RG=$(spokeRgNameFromS2)"
+          displayName: "Echo spoke (debug)"
+
+        - task: AzureCLI@2
+          displayName: "Terraform apply (Stage4b Spoke→Hub)"
+          inputs:
+            azureSubscription: 'snp-pipeline-api'
+            scriptType: ps
+            scriptLocation: inlineScript
+            inlineScript: |
+              $ErrorActionPreference = 'Stop'
+              az account set --subscription "$(subscriptionIdFromStage0)"
+              Write-Host "Using subscription (spoke): $(subscriptionIdFromStage0)"
+
+              $env:ARM_USE_AZCLI_AUTH = "true"
+
+              # Spoke（前段出力を注入）
+              $env:TF_VAR_spoke_vnet_name = "$(spokeVnetNameFromS2)"
+              $env:TF_VAR_spoke_rg_name   = "$(spokeRgNameFromS2)"
+
+              # Hub の固定値は terraform/stage4b.../terraform.tfvars に配置済み
+              Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-spoke-to-hub"
               try {
                 terraform init -no-color
                 terraform apply -auto-approve -no-color
