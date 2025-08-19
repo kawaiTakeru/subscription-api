@@ -1,4 +1,8 @@
-# Spoke 側は TF_VAR_* で自動注入（ここに書かない）
-hub_vnet_name       = "vnet-test-hubnw-prd-jpe-001"
-hub_rg_name         = "rg-test-hubnw-prd-jpe-001"
-hub_subscription_id = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
+# Hub は固定（このステージは hub サブスクリプションで実行）
+hub_vnet_name = "vnet-test-hubnw-prd-jpe-001"
+hub_rg_name   = "rg-test-hubnw-prd-jpe-001"
+
+# Spoke 側の 3つはパイプラインから TF_VAR_* で与える
+# spoke_vnet_name
+# spoke_rg_name
+# spoke_subscription_id
