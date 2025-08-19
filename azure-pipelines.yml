@@ -372,6 +372,8 @@ stages:
 - stage: stage4b_peering_spoke_to_hub
   displayName: "Stage4b - Peering Spoke → Hub"
   dependsOn:
+    - stage0_subscription         
+    - stage2_vnet                 
     - stage4a_peering_hub_to_spoke
   condition: succeeded('stage4a_peering_hub_to_spoke')
   jobs:
@@ -407,9 +409,29 @@ stages:
               $env:TF_VAR_spoke_vnet_name = "$(spokeVnetNameFromS2)"
               $env:TF_VAR_spoke_rg_name   = "$(spokeRgNameFromS2)"
 
-              # Hub の固定値は terraform/stage4b.../terraform.tfvars に配置済み
               Push-Location "$(Build.SourcesDirectory)\terraform\stage4b-peering-spoke-to-hub"
               try {
                 terraform init -no-color
                 terraform apply -auto-approve -no-color
               } finally { Pop-Location }
+
+        # 作成できたか“必ず”検証（無ければ失敗にする）
+        - task: AzureCLI@2
+          displayName: "Verify peering exists (spoke-to-hub)"
+          inputs:
+            azureSubscription: 'snp-pipeline-api'
+            scriptType: ps
+            scriptLocation: inlineScript
+            inlineScript: |
+              $ErrorActionPreference = 'Stop'
+              az account set --subscription "$(subscriptionIdFromStage0)"
+              $state = az network vnet peering show `
+                --resource-group "$(spokeRgNameFromS2)" `
+                --vnet-name "$(spokeVnetNameFromS2)" `
+                --name "spoke-to-hub" `
+                --query peeringState -o tsv 2>$null
+              if (-not $state) {
+                Write-Error "spoke-to-hub peering not found under RG=$(spokeRgNameFromS2) VNet=$(spokeVnetNameFromS2)"
+              } else {
+                Write-Host "Peering 'spoke-to-hub' state: $state"
+              }
