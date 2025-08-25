@@ -1,38 +1,19 @@
+# azure-pipelines.yml
+# Microsoft-hosted Agent (Ubuntu) で動く最小テストパイプライン
+
 trigger:
-- main
+- main   # main ブランチに push されたら実行
 
-variables:
-  system.debug: true
+pool:
+  vmImage: 'ubuntu-latest'   # Microsoft-hosted Agent を利用
 
-jobs:
-- job: ubuntu
-  displayName: "Ubuntu debug"
-  pool: { vmImage: 'ubuntu-latest' }
-  steps:
-  - checkout: self
-  - script: |
-      echo "Hello from Ubuntu"
-      echo "Agent.OS=$(Agent.OS)"
-    displayName: "Hello (Ubuntu)"
-  - bash: |
-      set -euxo pipefail
-      uname -a || true
-      cat /etc/os-release || true
-      which terraform || true; terraform -version || true
-      which az || true; az version || true
-    displayName: "Linux debug dump"
+steps:
+- script: echo "✅ Hello from Microsoft-hosted Ubuntu Agent!"
+  displayName: "Say hello (Ubuntu)"
 
-- job: windows
-  displayName: "Windows debug"
-  dependsOn: ubuntu
-  pool: { vmImage: 'windows-latest' }
-  steps:
-  - checkout: self
-  - pwsh: |
-      Write-Host "Hello from Windows"
-      Write-Host "Agent.OS=$(Agent.OS)"
-      $PSVersionTable
-      systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
-      where terraform; terraform -version
-      where az; az version
-    displayName: "Windows debug dump"
+- script: |
+    echo "Agent OS: $(Agent.OS)"
+    echo "Agent Name: $(Agent.Name)"
+    echo "Agent Version: $(Agent.Version)"
+    echo "Job triggered at: $(Build.QueuedTime)"
+  displayName: "Show agent info"
