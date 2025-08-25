@@ -9,7 +9,21 @@ variables:
   - name: System.Debug
     value: 'true'
 
+
+
 stages:
+- stage: sanity_hosted
+  displayName: "Sanity - Microsoft-hosted pickup test"
+  jobs:
+  - job: quick
+    displayName: "Quick agent pickup"
+    pool:
+      vmImage: 'windows-latest'     # ← ここでテストしたいイメージを指定（ubuntu-latestでもOK）
+    steps:
+    - checkout: none                # 速度優先（リポジトリ取得をスキップ）
+    - powershell: '$PSVersionTable' # 1秒で終わるテスト
+
+
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
 # =========================================================
