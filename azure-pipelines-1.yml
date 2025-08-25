@@ -1,61 +1,38 @@
-# Run on both Microsoft-hosted Ubuntu & Windows with rich debug output
-
 trigger:
 - main
 
-# enable verbose logs
 variables:
   system.debug: true
 
 jobs:
-- job: matrix_debug
-  displayName: "Matrix: ubuntu-latest & windows-latest"
-  strategy:
-    matrix:
-      ubuntu:
-        imageName: 'ubuntu-latest'
-      windows:
-        imageName: 'windows-latest'
-  pool:
-    vmImage: $(imageName)
-
+- job: ubuntu
+  displayName: "Ubuntu debug"
+  pool: { vmImage: 'ubuntu-latest' }
   steps:
   - checkout: self
-
   - script: |
-      echo "Hello, world!"
-      echo "Agent.OS = $(Agent.OS)"
-      echo "Agent.Name = $(Agent.Name)"
-      echo "Agent.Version = $(Agent.Version)"
-      echo "Image = $(imageName)"
-    displayName: "Sanity: hello & agent info"
-
-  # ===== Linux debug dump =====
+      echo "Hello from Ubuntu"
+      echo "Agent.OS=$(Agent.OS)"
+    displayName: "Hello (Ubuntu)"
   - bash: |
       set -euxo pipefail
-      echo "== OS release ==" 
       uname -a || true
       cat /etc/os-release || true
-
-      echo "== Tool versions (best-effort) =="
-      which az || true; az version || true
       which terraform || true; terraform -version || true
-      which python3 || true; python3 --version || true
-      which node || true; node --version || true
-      which pwsh || true; pwsh -v || true
-
-      echo "== Network quick check =="
-      curl -I https://www.microsoft.com || true
-
-      echo "== First 100 env vars =="
-      printenv | sort | sed -n '1,100p'
+      which az || true; az version || true
     displayName: "Linux debug dump"
-    condition: eq( variables['Agent.OS'], 'Linux')
 
-  # ===== Windows debug dump (PowerShell Core) =====
+- job: windows
+  displayName: "Windows debug"
+  dependsOn: ubuntu
+  pool: { vmImage: 'windows-latest' }
+  steps:
+  - checkout: self
   - pwsh: |
+      Write-Host "Hello from Windows"
+      Write-Host "Agent.OS=$(Agent.OS)"
       $PSVersionTable
-      Write-Host "== OS version =="
       systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
-      Write-Host "== Tool versions (best-effort) =="
-      where az;
+      where terraform; terraform -version
+      where az; az version
+    displayName: "Windows debug dump"
