@@ -1,19 +1,44 @@
 # azure-pipelines.yml
-# Microsoft-hosted Agent (Ubuntu) で動く最小テストパイプライン
+# Microsoft-hosted (Azure Pipelines) での実行確認用・最小テスト
+# 手動実行向けに trigger は無効化（必要なら main に変更）
 
-trigger:
-- main   # main ブランチに push されたら実行
+trigger: none
 
-pool:
-  vmImage: 'ubuntu-latest'   # Microsoft-hosted Agent を利用
+stages:
+- stage: sanity
+  displayName: "Run on Microsoft-hosted agents"
+  jobs:
+  # --- Ubuntu ---
+  - job: ubuntu
+    displayName: "Ubuntu on Azure Pipelines"
+    pool:
+      name: 'Azure Pipelines'
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: none
+    - script: |
+        echo "✅ Hello from Ubuntu (Microsoft-hosted)"
+        echo "Agent.Name=$(Agent.Name)"
+        echo "Agent.OS=$(Agent.OS)"
+        echo "Agent.Version=$(Agent.Version)"
+        echo "Image=ubuntu-latest"
+        az --version || true
+      displayName: "Sanity (Ubuntu)"
 
-steps:
-- script: echo "✅ Hello from Microsoft-hosted Ubuntu Agent!"
-  displayName: "Say hello (Ubuntu)"
-
-- script: |
-    echo "Agent OS: $(Agent.OS)"
-    echo "Agent Name: $(Agent.Name)"
-    echo "Agent Version: $(Agent.Version)"
-    echo "Job triggered at: $(Build.QueuedTime)"
-  displayName: "Show agent info"
+  # --- Windows ---
+  - job: windows
+    displayName: "Windows on Azure Pipelines"
+    dependsOn: ubuntu
+    pool:
+      name: 'Azure Pipelines'
+      vmImage: 'windows-latest'
+    steps:
+    - checkout: none
+    - pwsh: |
+        Write-Host "✅ Hello from Windows (Microsoft-hosted)"
+        Write-Host "Agent.Name=$(Agent.Name)"
+        Write-Host "Agent.OS=$(Agent.OS)"
+        Write-Host "Agent.Version=$(Agent.Version)"
+        Write-Host "Image=windows-latest"
+        az --version
+      displayName: "Sanity (Windows)"
