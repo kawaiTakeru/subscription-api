@@ -1,19 +1,61 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+# Run on both Microsoft-hosted Ubuntu & Windows with rich debug output
 
 trigger:
 - main
 
-pool:
-  vmImage: ubuntu-latest
+# enable verbose logs
+variables:
+  system.debug: true
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+jobs:
+- job: matrix_debug
+  displayName: "Matrix: ubuntu-latest & windows-latest"
+  strategy:
+    matrix:
+      ubuntu:
+        imageName: 'ubuntu-latest'
+      windows:
+        imageName: 'windows-latest'
+  pool:
+    vmImage: $(imageName)
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+  steps:
+  - checkout: self
+
+  - script: |
+      echo "Hello, world!"
+      echo "Agent.OS = $(Agent.OS)"
+      echo "Agent.Name = $(Agent.Name)"
+      echo "Agent.Version = $(Agent.Version)"
+      echo "Image = $(imageName)"
+    displayName: "Sanity: hello & agent info"
+
+  # ===== Linux debug dump =====
+  - bash: |
+      set -euxo pipefail
+      echo "== OS release ==" 
+      uname -a || true
+      cat /etc/os-release || true
+
+      echo "== Tool versions (best-effort) =="
+      which az || true; az version || true
+      which terraform || true; terraform -version || true
+      which python3 || true; python3 --version || true
+      which node || true; node --version || true
+      which pwsh || true; pwsh -v || true
+
+      echo "== Network quick check =="
+      curl -I https://www.microsoft.com || true
+
+      echo "== First 100 env vars =="
+      printenv | sort | sed -n '1,100p'
+    displayName: "Linux debug dump"
+    condition: eq( variables['Agent.OS'], 'Linux')
+
+  # ===== Windows debug dump (PowerShell Core) =====
+  - pwsh: |
+      $PSVersionTable
+      Write-Host "== OS version =="
+      systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+      Write-Host "== Tool versions (best-effort) =="
+      where az;
