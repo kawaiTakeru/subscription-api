@@ -12,6 +12,25 @@ variables:
 
 
 stages:
+- stage: sanity
+  displayName: "Hosted agent pickup test (Ubuntu & Windows)"
+  jobs:
+  # Ubuntu で拾われるかテスト
+  - job: quick_ubuntu
+    displayName: "Quick pickup (ubuntu-latest)"
+    pool: { vmImage: 'ubuntu-latest' }
+    steps:
+    - checkout: none
+    - bash: 'uname -a'
+
+  # Windows で拾われるかテスト
+  - job: quick_windows
+    displayName: "Quick pickup (windows-latest)"
+    pool: { vmImage: 'windows-latest' }
+    steps:
+    - checkout: none
+    - powershell: '$PSVersionTable'
+    
 - stage: sanity_hosted
   displayName: "Sanity - Microsoft-hosted pickup test"
   jobs:
@@ -29,6 +48,8 @@ stages:
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
+  dependsOn: sanity
+  condition: succeeded('sanity')   # ← 両ジョブ成功で true（どちらか失敗なら進まない）
   jobs:
   - job: run_tf
     displayName: "Terraform apply (subscription)"
