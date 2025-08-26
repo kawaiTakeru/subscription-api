@@ -1,44 +1,166 @@
-# azure-pipelines.yml
-# Microsoft-hosted (Azure Pipelines) での実行確認用・最小テスト
-# 手動実行向けに trigger は無効化（必要なら main に変更）
-
+# debug-subscription-perms.yml
 trigger: none
+pr: none
+
+pool:
+  vmImage: 'windows-latest'  # Hostedで再現性を見る
+
+variables:
+  - name: System.Debug
+    value: 'true'
 
 stages:
-- stage: sanity
-  displayName: "Run on Microsoft-hosted agents"
+- stage: debug
+  displayName: "Debug Service Principal & Billing permissions"
   jobs:
-  # --- Ubuntu ---
-  - job: ubuntu
-    displayName: "Ubuntu on Azure Pipelines"
-    pool:
-      name: 'Azure Pipelines'
-      vmImage: 'ubuntu-latest'
+  - job: probe
+    displayName: "Probe whoami / RBAC / Billing roles / REST"
     steps:
-    - checkout: none
-    - script: |
-        echo "✅ Hello from Ubuntu (Microsoft-hosted)"
-        echo "Agent.Name=$(Agent.Name)"
-        echo "Agent.OS=$(Agent.OS)"
-        echo "Agent.Version=$(Agent.Version)"
-        echo "Image=ubuntu-latest"
-        az --version || true
-      displayName: "Sanity (Ubuntu)"
+    - task: AzureCLI@2
+      displayName: "WHOAMI (service connection identity)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'   # ←あなたの Service connection 名
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
 
-  # --- Windows ---
-  - job: windows
-    displayName: "Windows on Azure Pipelines"
-    dependsOn: ubuntu
-    pool:
-      name: 'Azure Pipelines'
-      vmImage: 'windows-latest'
-    steps:
-    - checkout: none
-    - pwsh: |
-        Write-Host "✅ Hello from Windows (Microsoft-hosted)"
-        Write-Host "Agent.Name=$(Agent.Name)"
-        Write-Host "Agent.OS=$(Agent.OS)"
-        Write-Host "Agent.Version=$(Agent.Version)"
-        Write-Host "Image=windows-latest"
-        az --version
-      displayName: "Sanity (Windows)"
+          # 1) SPN の実体
+          $acct = az account show --only-show-errors | ConvertFrom-Json
+          $clientId = $acct.user.name
+          $tenantId = $acct.tenantId
+
+          $sp = az ad sp show --id $clientId --only-show-errors | ConvertFrom-Json
+          $spObjId = $sp.id
+          $spDisp  = $sp.displayName
+
+          Write-Host "== WHOAMI =========="
+          Write-Host ("TenantId     : {0}" -f $tenantId)
+          Write-Host ("ClientId     : {0}" -f $clientId)
+          Write-Host ("SP ObjectId  : {0}" -f $spObjId)
+          Write-Host ("SP Name      : {0}" -f $spDisp)
+          Write-Host ""
+
+          # 2) Azure RBAC（サブスクリプション/管理グループなどの割当）
+          Write-Host "== Azure RBAC role assignments (assignee = this SPN) =="
+          az role assignment list --assignee $spObjId --all -o table
+
+          # 3) Billing拡張（CLI拡張）導入
+          if (-not (az extension list -o tsv | Select-String -SimpleMatch "billing")) {
+            az extension add --name billing --only-show-errors
+          } else {
+            az extension update --name billing --only-show-errors | Out-Null
+          }
+
+          # 4) Billing Accounts の列挙（成功/失敗で不足ロールが見える）
+          Write-Host ""
+          Write-Host "== Try list Billing Accounts (REST via az rest) =="
+          $api = "2024-04-01"
+          try {
+            $resp = az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api" --only-show-errors
+            Write-Host "[SUCCESS] billingAccounts list succeeded."
+            $ba = ($resp | ConvertFrom-Json).value
+            if ($ba) {
+              Write-Host "Found billingAccounts:"
+              $ba | ForEach-Object {
+                Write-Host (" - id: {0}" -f $_.id)
+                Write-Host ("   name: {0}" -f $_.name)
+                Write-Host ("   displayName: {0}" -f $_.properties.displayName)
+              }
+            } else {
+              Write-Host "(No billingAccounts returned)"
+            }
+          } catch {
+            Write-Warning "[FAILED] billingAccounts list failed. This usually means the SPN lacks a Billing role."
+            Write-Host "Error detail:"
+            Write-Host $_.Exception.Message
+          }
+
+          # 5) 見つかった Billing Account 単位で Billing ロール割当をチェック
+          Write-Host ""
+          Write-Host "== Billing role assignments for this SPN (by billing scope) =="
+          try {
+            $resp2 = az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api" --only-show-errors
+            $bas = ($resp2 | ConvertFrom-Json).value
+          } catch { $bas = @() }
+
+          if ($bas -and $bas.Count -gt 0) {
+            foreach ($b in $bas) {
+              $baScope = $b.id  # /providers/Microsoft.Billing/billingAccounts/{billingAccountId}
+              Write-Host ("-- BillingAccount scope: {0}" -f $baScope)
+
+              # Billing ロール割当（principalId が SP ObjectId と一致するもの）
+              try {
+                $assigns = az billing role-assignment list --scope $baScope --only-show-errors | ConvertFrom-Json
+                $mine = $assigns | Where-Object { $_.principalId -eq $spObjId }
+                if ($mine) {
+                  $mine | ForEach-Object {
+                    Write-Host ("   Role: {0}  PrincipalId: {1}" -f $_.roleDefinitionName, $_.principalId)
+                  }
+                } else {
+                  Write-Host "   (no billing role assignment for this SPN at billingAccount)"
+                }
+              } catch {
+                Write-Warning "   failed to query billing role-assignment (need billing extension/permissions)"
+              }
+
+              # さらに下位の Billing Profile / Invoice Section も拾えるだけ見る
+              try {
+                $profiles = az rest --method get --url "https://management.azure.com$($baScope)/billingProfiles?api-version=$api" --only-show-errors | ConvertFrom-Json
+                foreach ($p in $profiles.value) {
+                  $pScope = $p.id
+                  Write-Host ("   BillingProfile: {0}" -f $p.properties.displayName)
+                  try {
+                    $pa = az billing role-assignment list --scope $pScope --only-show-errors | ConvertFrom-Json
+                    $pmine = $pa | Where-Object { $_.principalId -eq $spObjId }
+                    if ($pmine) {
+                      $pmine | ForEach-Object {
+                        Write-Host ("     Role: {0}  PrincipalId: {1}" -f $_.roleDefinitionName, $_.principalId)
+                      }
+                    } else {
+                      Write-Host "     (no billing role assignment for this SPN at billingProfile)"
+                    }
+                  } catch {
+                    Write-Warning "     failed to query billingProfile role-assignment"
+                  }
+
+                  # Invoice Sections
+                  try {
+                    $invs = az rest --method get --url ("https://management.azure.com{0}/invoiceSections?api-version={1}" -f $pScope, $api) --only-show-errors | ConvertFrom-Json
+                    foreach ($iv in $invs.value) {
+                      $ivScope = $iv.id
+                      Write-Host ("     InvoiceSection: {0}" -f $iv.properties.displayName)
+                      try {
+                        $ia = az billing role-assignment list --scope $ivScope --only-show-errors | ConvertFrom-Json
+                        $imine = $ia | Where-Object { $_.principalId -eq $spObjId }
+                        if ($imine) {
+                          $imine | ForEach-Object {
+                            Write-Host ("       Role: {0}  PrincipalId: {1}" -f $_.roleDefinitionName, $_.principalId)
+                          }
+                        } else {
+                          Write-Host "       (no billing role assignment for this SPN at invoiceSection)"
+                        }
+                      } catch {
+                        Write-Warning "       failed to query invoiceSection role-assignment"
+                      }
+                    }
+                  } catch {
+                    Write-Warning "     failed to list invoiceSections"
+                  }
+                }
+              } catch {
+                Write-Warning "   failed to list billingProfiles"
+              }
+            }
+          } else {
+            Write-Host "(No billingAccounts resolved or you don't have rights to enumerate them.)"
+          }
+
+          Write-Host ""
+          Write-Host "== Access token sanity (management) =="
+          az account get-access-token --resource https://management.azure.com -o none
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Got management token successfully."
+          } else {
+            Write-Warning "Failed to get management token."
+          }
