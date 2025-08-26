@@ -3,4 +3,7 @@ subscription_display_name = "CR 検証サブスクリプション 107"
 billing_account_name      = "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84-9d39-05562a37bab0_2019-05-31"
 billing_profile_name      = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name      = "6HB2-O3GL-PJA-PGB"
-subscription_workload = "Production"
+subscription_workload     = "Production"
+
+# 必要なときだけ true にしてください（通常は false のままで OK）
+enable_billing_check      = false
