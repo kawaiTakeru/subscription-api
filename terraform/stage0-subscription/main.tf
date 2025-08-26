@@ -7,7 +7,7 @@ terraform {
   required_version = ">= 1.4.0"
   required_providers {
     azapi = {
-      source  = "Azure/azapi"
+      source  = "azure/azapi"   # ← 名前空間は azure（大文字小文字は不問）
       version = "~> 1.0"
     }
     azurerm = {
@@ -23,6 +23,11 @@ terraform {
 
 provider "azurerm" {
   features {}
+}
+
+# ★ 重要: AzAPI に CLI 認証を使わせる（MSI/IMDS を試させない）
+provider "azapi" {
+  use_cli = true
 }
 
 # ===== Optional: Billing 読取チェック =====
