@@ -24,6 +24,7 @@ provider "azurerm" {
 # AzAPI に Azure CLI 認証を使わせる（パイプラインの ARM_USE_AZCLI_AUTH と合わせ技）
 provider "azapi" {
   use_cli = true
+　use_msi = false   # ★ これを追加して IMDS に行かないようにする
 }
 
 # ===== Build billingScope =====
