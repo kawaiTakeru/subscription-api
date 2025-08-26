@@ -11,9 +11,6 @@ variables:
   # 生成するサブスクリプションのワークロード
   - name: WORKLOAD
     value: 'Production'          # or 'DevTest'
-  # 作成したサブスクリプションを残すかどうか
-  - name: KEEP_CREATED_SUBSCRIPTION
-    value: 'false'               # 'true' にすると削除しません
   # エイリアス名の接頭辞（テナント内で一意になるよう時刻でサフィックス付与）
   - name: ALIAS_PREFIX
     value: 'crpoc'
@@ -133,9 +130,9 @@ stages:
             throw "No role at InvoiceSection scope. Subscription creation via alias will fail."
           }
 
-          # ---------- Try creating a subscription via Alias ----------
+          # ---------- Create a subscription via Alias (create only) ----------
           Write-Host ""
-          Write-Host "== Alias Create Test =="
+          Write-Host "== Alias Create Test (create only) =="
 
           # Pick the first InvoiceSection we found (ScopeName is '<billingAccount>/<billingProfile>/<invoiceSection>')
           $targetScopeName = $invoiceRoles[0].ScopeName
@@ -182,14 +179,9 @@ stages:
             Write-Host "Alias provisioning succeeded."
           }
 
-          $keep = "${env:KEEP_CREATED_SUBSCRIPTION}"
-          if ($keep -and $keep.ToLower() -eq "true") {
-            Write-Host "KEEP_CREATED_SUBSCRIPTION=true -> Leaving alias/subscription in place."
-          } else {
-            Write-Host "Deleting alias to clean up (this also deletes the created subscription)."
-            az account alias delete -n $aliasName -y --only-show-errors
-            Write-Host "Alias deleted."
-          }
-
           Write-Host ""
-          Write-Host "OK: Alias create test completed."
+          Write-Host "== RESULT (keep) =="
+          Write-Host "AliasName       : $aliasName"
+          Write-Host "DisplayName     : $displayName"
+          Write-Host "SubscriptionId  : $subId"
+          Write-Host "ProvisioningState: $state"
