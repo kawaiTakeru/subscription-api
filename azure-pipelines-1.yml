@@ -19,46 +19,49 @@ stages:
     - task: AzureCLI@2
       displayName: "Probe billing roles (REST)"
       inputs:
-        azureSubscription: 'snp-pipeline-api'    # <-- Service connection name
-        scriptType: ps
+        azureSubscription: 'snp-pipeline-api'   # Service connection name
+        scriptType: pscore                      # Use PowerShell Core (UTF-8 by default)
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference    = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+          # Be explicit about UTF-8 just in case
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:PYTHONIOENCODING = 'utf-8'
+
           function Get-Json($url) {
-            $out = az rest --method get --url $url 2>$null
+            $out = az rest --method get --url $url --only-show-errors -o json 2>$null
             if (-not $out) { throw "az rest failed: $url" }
             return ($out | ConvertFrom-Json)
           }
 
-          # whoami
-          $account  = az account show | ConvertFrom-Json
+          Write-Host "== WHOAMI =="
+          $account  = az account show --only-show-errors -o json | ConvertFrom-Json
           $appId    = $account.user.name
           $tenantId = $account.tenantId
-          Write-Host "== WHOAMI =="
           Write-Host "tenantId : $tenantId"
           Write-Host "appId    : $appId"
 
-          $sp = az ad sp show --id $appId | ConvertFrom-Json
+          $sp = az ad sp show --id $appId --only-show-errors -o json | ConvertFrom-Json
           $spObjId = $sp.id
           Write-Host "spObjId  : $spObjId"
           Write-Host ""
 
-          # RBAC (reference)
+          # RBAC at root (for reference only)
           Write-Host "== RBAC at root (reference) =="
-          az role assignment list --assignee $appId --all -o table
+          az role assignment list --assignee $appId --all -o table --only-show-errors
           Write-Host ""
 
           $api = "2024-04-01"
           $found = @()
 
-          # Billing accounts
+          # List Billing Accounts
           try {
             $accs = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api").value
           } catch {
-            throw "Cannot list billingAccounts. Likely missing Billing Account reader-level permission."
+            throw "Cannot list billingAccounts. Likely missing Billing Account reader permission."
           }
 
           if (-not $accs -or $accs.Count -eq 0) {
@@ -70,48 +73,69 @@ stages:
             $accDisp = $acc.properties.displayName
             Write-Host ">> BillingAccount: $accDisp (name=$accName)"
 
-            # account scope roles
+            # Roles at Billing Account
             $rolesA = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingRoleAssignments?api-version=$api").value
-            $mineA  = $rolesA | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-              [PSCustomObject]@{ Scope="BillingAccount"; ScopeName=$accName; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
+            if ($rolesA) {
+              $mineA  = $rolesA | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+                [PSCustomObject]@{
+                  Scope          = "BillingAccount"
+                  ScopeName      = $accName
+                  RoleDefinitionId = $_.properties.roleDefinitionId
+                  PrincipalId    = $_.properties.principalId
+                }
+              }
+              if ($mineA) { $found += $mineA }
             }
-            if ($mineA) { $found += $mineA }
 
-            # profiles
+            # Billing Profiles
             $profiles = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles?api-version=$api").value
-            foreach ($p in $profiles) {
+            foreach ($p in ($profiles | ForEach-Object { $_ })) {
               $pname = $p.name
               $pdisp = $p.properties.displayName
               Write-Host "   - BillingProfile: $pdisp (name=$pname)"
 
               $rolesP = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/billingRoleAssignments?api-version=$api").value
-              $mineP  = $rolesP | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                [PSCustomObject]@{ Scope="BillingProfile"; ScopeName="$accName/$pname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
+              if ($rolesP) {
+                $mineP  = $rolesP | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+                  [PSCustomObject]@{
+                    Scope            = "BillingProfile"
+                    ScopeName        = "$accName/$pname"
+                    RoleDefinitionId = $_.properties.roleDefinitionId
+                    PrincipalId      = $_.properties.principalId
+                  }
+                }
+                if ($mineP) { $found += $mineP }
               }
-              if ($mineP) { $found += $mineP }
 
-              # invoice sections
+              # Invoice Sections
               $invoices = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections?api-version=$api").value
-              foreach ($iv in $invoices) {
+              foreach ($iv in ($invoices | ForEach-Object { $_ })) {
                 $ivname = $iv.name
                 $ivdisp = $iv.properties.displayName
                 Write-Host "       * InvoiceSection: $ivdisp (name=$ivname)"
 
                 $rolesI = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections/$ivname/billingRoleAssignments?api-version=$api").value
-                $mineI  = $rolesI | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                  [PSCustomObject]@{ Scope="InvoiceSection"; ScopeName="$accName/$pname/$ivname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
+                if ($rolesI) {
+                  $mineI  = $rolesI | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+                    [PSCustomObject]@{
+                      Scope            = "InvoiceSection"
+                      ScopeName        = "$accName/$pname/$ivname"
+                      RoleDefinitionId = $_.properties.roleDefinitionId
+                      PrincipalId      = $_.properties.principalId
+                    }
+                  }
+                  if ($mineI) { $found += $mineI }
                 }
-                if ($mineI) { $found += $mineI }
               }
             }
           }
 
           Write-Host ""
-          Write-Host "== Billing role assignments for this SP =="
+          Write-Host "== Billing role assignments for this service principal =="
           if ($found.Count -gt 0) {
             $found | Sort-Object Scope, ScopeName | Format-Table -AutoSize
           } else {
-            Write-Error "No billing roles found for this SP at any scope (Account/Profile/InvoiceSection)."
+            Write-Error "No billing roles found at any scope (Account/Profile/InvoiceSection)."
           }
 
           $hasInvoice = $found | Where-Object { $_.Scope -eq "InvoiceSection" }
@@ -120,4 +144,4 @@ stages:
           }
 
           Write-Host ""
-          Write-Host "OK: Found at least one InvoiceSection-scope billing role for this SP."
+          Write-Host "OK: Found at least one InvoiceSection-scope billing role for this service principal."
