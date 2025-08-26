@@ -3,57 +3,28 @@ trigger: none
 pr: none
 
 pool:
-  vmImage: 'ubuntu-latest'
+  vmImage: 'windows-latest'   # Microsoft-hosted Windows agent
 
 variables:
   - name: System.Debug
     value: 'true'
 
-
-
 stages:
-- stage: sanity
-  displayName: "Hosted agent pickup test (Ubuntu & Windows)"
-  jobs:
-  # Ubuntu で拾われるかテスト
-  - job: quick_ubuntu
-    displayName: "Quick pickup (ubuntu-latest)"
-    pool: { vmImage: 'ubuntu-latest' }
-    steps:
-    - checkout: none
-    - bash: 'uname -a'
-
-  # Windows で拾われるかテスト
-  - job: quick_windows
-    displayName: "Quick pickup (windows-latest)"
-    pool: { vmImage: 'windows-latest' }
-    steps:
-    - checkout: none
-    - powershell: '$PSVersionTable'
-    
-- stage: sanity_hosted
-  displayName: "Sanity - Microsoft-hosted pickup test"
-  jobs:
-  - job: quick
-    displayName: "Quick agent pickup"
-    pool:
-      vmImage: 'windows-latest'     # ← ここでテストしたいイメージを指定（ubuntu-latestでもOK）
-    steps:
-    - checkout: none                # 速度優先（リポジトリ取得をスキップ）
-    - powershell: '$PSVersionTable' # 1秒で終わるテスト
-
-
 # =========================================================
 # Stage0: Subscription (Create via AzAPI)
 # =========================================================
 - stage: stage0_subscription
   displayName: "Stage0 - Create Subscription (AzAPI)"
-  dependsOn: sanity
-  condition: succeeded('sanity')   # ← 両ジョブ成功で true（どちらか失敗なら進まない）
   jobs:
   - job: run_tf
     displayName: "Terraform apply (subscription)"
     steps:
+    - checkout: self
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform"
+      inputs:
+        terraformVersion: '1.7.5'
+
     - powershell: |
         Write-Host "Agent Name  : $env:AGENT_NAME"
         Write-Host "Agent OS    : $env:AGENT_OS"
@@ -200,7 +171,6 @@ stages:
           } else {
             Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
-          }
 
 # =========================================================
 # Stage1: Resource Group
@@ -217,6 +187,12 @@ stages:
       subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
+    - checkout: self
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform"
+      inputs:
+        terraformVersion: '1.7.5'
+
     - powershell: |
         $sub = "$(subscriptionIdFromStage0)"
         if ([string]::IsNullOrWhiteSpace($sub)) { throw "subscriptionIdFromStage0 is empty" }
@@ -257,6 +233,12 @@ stages:
       subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
+    - checkout: self
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform"
+      inputs:
+        terraformVersion: '1.7.5'
+
     - powershell: |
         Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
       displayName: "Echo subId (debug)"
@@ -327,6 +309,12 @@ stages:
       subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
+    - checkout: self
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform"
+      inputs:
+        terraformVersion: '1.7.5'
+
     - powershell: |
         Write-Host "subscriptionIdFromStage0=$(subscriptionIdFromStage0)"
       displayName: "Echo subId (debug)"
@@ -361,7 +349,7 @@ stages:
     - job: peering_hub_to_spoke
       displayName: "Hub → Spoke ピアリング作成"
       variables:
-        spokeSubIdFromS0:   $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+        spokeSubIdFromS0:    $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
         spokeVnetNameFromS2: $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
         spokeRgNameFromS2:   $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
       condition: and(succeeded(),
@@ -369,6 +357,12 @@ stages:
                      ne(variables['spokeVnetNameFromS2'], ''),
                      ne(variables['spokeRgNameFromS2'], ''))
       steps:
+        - checkout: self
+        - task: TerraformInstaller@1
+          displayName: "Install Terraform"
+          inputs:
+            terraformVersion: '1.7.5'
+
         - powershell: |
             Write-Host "Spoke: sub=$(spokeSubIdFromS0) vnet=$(spokeVnetNameFromS2) rg=$(spokeRgNameFromS2)"
           displayName: "Echo spoke (debug)"
@@ -425,6 +419,12 @@ stages:
                      ne(variables['spokeVnetNameFromS2'], ''),
                      ne(variables['spokeRgNameFromS2'], ''))
       steps:
+        - checkout: self
+        - task: TerraformInstaller@1
+          displayName: "Install Terraform"
+          inputs:
+            terraformVersion: '1.7.5'
+
         - powershell: |
             Write-Host "Spoke VNet=$(spokeVnetNameFromS2), RG=$(spokeRgNameFromS2)"
           displayName: "Echo spoke (debug)"
@@ -475,4 +475,3 @@ stages:
                 Write-Error "spoke-to-hub peering not found under RG=$(spokeRgNameFromS2) VNet=$(spokeVnetNameFromS2)"
               } else {
                 Write-Host "Peering 'spoke-to-hub' state: $state"
-              }
