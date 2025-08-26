@@ -1,226 +1,187 @@
-# subscription-api / azure-pipelines.yml  (FIXED)
+# subscription-api / azure-pipelines.yml  (Microsoft-hosted 移行版)
 trigger: none
 pr: none
 
 pool:
-  vmImage: windows-latest
+  vmImage: 'windows-2022'    # Microsoft-hosted（Windows Server 2022 に固定）
 
 variables:
-  # System.Debug ON
   - name: System.Debug
     value: 'true'
 
-  # 生成するサブスクリプションのワークロード
-  - name: WORKLOAD
-    value: 'Production'   # or 'DevTest'
-
-  # エイリアス名の接頭辞（テナント内で一意になるように時刻サフィックス付与）
-  - name: ALIAS_PREFIX
-    value: 'crpoc'
-
-# =========================================================
-# Stage0: Subscription (Create via Azure CLI; then optional TF import)
-# =========================================================
 stages:
+# =========================================================
+# Stage0: Subscription (Create via AzAPI)
+# =========================================================
 - stage: stage0_subscription
-  displayName: "Stage0 - Create Subscription (Alias via CLI)"
+  displayName: "Stage0 - Create Subscription (AzAPI)"
   jobs:
-  - job: create_alias
-    displayName: "Probe billing + Create alias (CLI) + (optional) TF import"
+  - job: run_tf
+    displayName: "Terraform apply (subscription)"
     steps:
     - checkout: self
 
-    - task: AzureCLI@2
-      displayName: "WHOAMI / RBAC / Billing probes + Alias create"
+    # Microsoft-hosted なので各ジョブで Terraform を明示インストール
+    - task: TerraformInstaller@1
+      displayName: "Install Terraform 1.7.5"
       inputs:
-        azureSubscription: 'snp-pipeline-api'   # Service connection name
-        scriptType: pscore                      # PowerShell Core (UTF-8)
+        terraformVersion: '1.7.5'
+
+    - powershell: |
+        Write-Host "Agent Name  : $env:AGENT_NAME"
+        Write-Host "Agent OS    : $env:AGENT_OS"
+        Write-Host "Agent Ver   : $env:AGENT_VERSION"
+      displayName: "Show Agent Info"
+
+    - task: AzureCLI@2
+      displayName: "WHOAMI (service connection identity)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
-          $ProgressPreference    = 'SilentlyContinue'
+          $clientId = az account show --query user.name -o tsv
+          $tenantId = az account show --query tenantId -o tsv
+          $subName  = az account show --query name -o tsv
+          $subId    = az account show --query id -o tsv
+
+          $sp      = az ad sp show --id $clientId --only-show-errors
+          $spJson  = $sp | ConvertFrom-Json
+          $spObjId = $spJson.id
+          $spName  = $spJson.displayName
+
+          Write-Host "== Service Connection =="
+          Write-Host "tenantId    : $tenantId"
+          Write-Host "subscription: $subName ($subId)"
+          Write-Host "clientId    : $clientId"
+          Write-Host "spObjectId  : $spObjId"
+          Write-Host "spName      : $spName"
+          Write-Host ""
+          Write-Host "== Current role assignments for this SP (all scopes) =="
+          az role assignment list --assignee $spObjId --all -o table
+
+    - task: AzureCLI@2
+      name: tf
+      displayName: "Terraform init/plan/apply (Stage0)"
+      inputs:
+        azureSubscription: 'snp-pipeline-api'
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $env:PYTHONIOENCODING = 'utf-8'
 
-          function Get-Json($url) {
-            $out = az rest --method get --url $url --only-show-errors -o json 2>$null
-            if (-not $out) { throw "az rest failed: $url" }
-            return ($out | ConvertFrom-Json)
+          # ★ 重要: AzAPI/azurerm が Azure CLI の資格情報を使うように固定（MSI/IMDS へ倒れない）
+          $env:ARM_USE_AZCLI_AUTH = "true"
+
+          $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
+          $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
+
+          function Get-AliasNameFromTfvars([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path)) { return "" }
+            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1
+            if ($line) { return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1') }
+            return ""
           }
 
-          Write-Host "== WHOAMI =="
-          $account  = az account show --only-show-errors -o json | ConvertFrom-Json
-          $appId    = $account.user.name
-          $tenantId = $account.tenantId
-          Write-Host "tenantId : $tenantId"
-          Write-Host "appId    : $appId"
-
-          $sp = az ad sp show --id $appId --only-show-errors -o json | ConvertFrom-Json
-          $spObjId = $sp.id
-          Write-Host "spObjId  : $spObjId"
-          Write-Host ""
-
-          # （参考）現在のRBAC
-          Write-Host "== RBAC at root (reference) =="
-          az role assignment list --assignee $appId --all -o table --only-show-errors
-          Write-Host ""
-
-          $api = "2024-04-01"
-          $found = @()
-          $accs = $null
-
-          # Billing accounts
-          try {
-            $accs = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api").value
-          } catch {
-            throw "Cannot list billingAccounts. Likely missing Billing Account reader permission."
+          function Get-SubIdViaAz([string]$AliasName) {
+            if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
+            try {
+              $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+            try {
+              $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+              $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+            return ""
           }
-          if (-not $accs -or $accs.Count -eq 0) { throw "No billingAccounts visible. Missing permissions." }
 
-          foreach ($acc in $accs) {
-            $accName = $acc.name
-            $accDisp = $acc.properties.displayName
-            Write-Host ">> BillingAccount: $accDisp (name=$accName)"
-
-            # Roles at Billing Account
-            $rolesA = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingRoleAssignments?api-version=$api").value
-            if ($rolesA) {
-              $mineA  = $rolesA | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                [PSCustomObject]@{ Scope="BillingAccount"; ScopeName=$accName; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
-              }
-              if ($mineA) { $found += $mineA }
+          function Wait-SubscriptionReady([string]$AliasName, [int]$MaxSeconds, [int]$IntervalSeconds) {
+            $deadline = (Get-Date).AddSeconds($MaxSeconds)
+            while ((Get-Date) -lt $deadline) {
+              $id = ""
+              try {
+                $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              } catch {}
+              try {
+                $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+                $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              } catch {}
+              Start-Sleep -Seconds $IntervalSeconds
             }
-
-            # Billing Profiles
-            $profiles = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles?api-version=$api").value
-            foreach ($p in ($profiles | ForEach-Object { $_ })) {
-              $pname = $p.name
-              $pdisp = $p.properties.displayName
-              Write-Host "   - BillingProfile: $pdisp (name=$pname)"
-
-              $rolesP = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/billingRoleAssignments?api-version=$api").value
-              if ($rolesP) {
-                $mineP  = $rolesP | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                  [PSCustomObject]@{ Scope="BillingProfile"; ScopeName="$accName/$pname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
-                }
-                if ($mineP) { $found += $mineP }
-              }
-
-              # Invoice Sections
-              $invoices = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections?api-version=$api").value
-              foreach ($iv in ($invoices | ForEach-Object { $_ })) {
-                $ivname = $iv.name
-                $ivdisp = $iv.properties.displayName
-                Write-Host "       * InvoiceSection: $ivdisp (name=$ivname)"
-
-                $rolesI = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections/$ivname/billingRoleAssignments?api-version=$api").value
-                if ($rolesI) {
-                  $mineI  = $rolesI | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                    [PSCustomObject]@{ Scope="InvoiceSection"; ScopeName="$accName/$pname/$ivname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
-                  }
-                  if ($mineI) { $found += $mineI }
-                }
-              }
-            }
+            return ""
           }
 
-          Write-Host ""
-          Write-Host "== Billing role assignments for this service principal =="
-          if ($found.Count -gt 0) {
-            $found | Sort-Object Scope, ScopeName | Format-Table -AutoSize
-          } else {
-            Write-Error "No billing roles found at any scope (Account/Profile/InvoiceSection)."
+          if (-not (Test-Path -LiteralPath $tfvars)) {
+            throw ("terraform.tfvars not found: " + $tfvars)
           }
 
-          $invoiceRoles = $found | Where-Object { $_.Scope -eq "InvoiceSection" }
-          if (-not $invoiceRoles -or $invoiceRoles.Count -eq 0) {
-            throw "No role at InvoiceSection scope. Subscription creation via alias will fail."
+          $aliasName = Get-AliasNameFromTfvars -Path $tfvars
+          if ([string]::IsNullOrWhiteSpace($aliasName)) {
+            throw "subscription_alias_name is empty in tfvars. Set it first."
           }
 
-          # ---------- Create a subscription via Alias (create only) ----------
-          Write-Host ""
-          Write-Host "== Alias Create =="
-
-          # Pick the first InvoiceSection we found (ScopeName is '<billingAccount>/<billingProfile>/<invoiceSection>')
-          $targetScopeName = $invoiceRoles[0].ScopeName
-          $parts = $targetScopeName -split '/'
-          if ($parts.Count -ne 3) { throw "Unexpected ScopeName format: $targetScopeName" }
-
-          $billingScope = "/providers/Microsoft.Billing/billingAccounts/$($parts[0])/billingProfiles/$($parts[1])/invoiceSections/$($parts[2])"
-          Write-Host "Using billingScope: $billingScope"
-
-          $aliasPrefix = "${env:ALIAS_PREFIX}"
-          if (-not $aliasPrefix) { $aliasPrefix = "crpoc" }
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-          $aliasName = "$aliasPrefix-$timestamp"
-          $displayName = "poc-$timestamp"
-          $workload = "${env:WORKLOAD}"
-          if (-not $workload) { $workload = "Production" }
-
-          Write-Host "Creating alias: $aliasName  (displayName: $displayName, workload: $workload)"
-          $createJson = az account alias create `
-            --name $aliasName `
-            --billing-scope $billingScope `
-            --display-name $displayName `
-            --workload $workload `
-            -o json --only-show-errors | ConvertFrom-Json
-
-          $subId = $createJson.properties.subscriptionId
-          $state = $createJson.properties.provisioningState
-          Write-Host "SubscriptionId: $subId"
-          Write-Host "ProvisioningState: $state"
-
-          # Poll
-          for ($i=0; $i -lt 10; $i++) {
-            Start-Sleep -Seconds 6
-            $show = az account alias show -n $aliasName -o json --only-show-errors | ConvertFrom-Json
-            $state = $show.properties.provisioningState
-            Write-Host "  Poll[$i] state: $state"
-            if ($state -eq "Succeeded") { break }
-          }
-
-          if ($state -ne "Succeeded") {
-            Write-Warning "Alias provisioning state is '$state'."
-          } else {
-            Write-Host "Alias provisioning succeeded."
-          }
-
-          # 出力（後段に渡す）
-          Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+          # 出力変数
           Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
-    # （任意）作った Alias を Terraform state に取り込みだけ行う（plan/applyはしない）
-    - task: PowerShell@2
-      displayName: "(optional) Terraform import alias resource"
-      condition: succeeded()    # 失敗しても後段には影響させないなら "always()" に変更可
-      inputs:
-        targetType: 'inline'
-        script: |
-          $ErrorActionPreference = 'Continue'
-          $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
-          $alias    = "$(create_alias.subscriptionAlias)"
-          if ([string]::IsNullOrWhiteSpace($alias)) {
-            Write-Host "No alias output. Skip import."
+          # 既存 alias チェック
+          $existingSubId = Get-SubIdViaAz -AliasName $aliasName
+          if ($existingSubId) {
+            Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
+
+            try {
+              Set-Location $stageDir
+              terraform init -no-color
+              $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
+              terraform import -no-color azapi_resource.subscription $rid 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
+            } catch {
+              Write-Host "terraform import failed but ignored."
+            } finally {
+              Set-Location "$(Build.SourcesDirectory)"
+            }
+
+            Write-Host "subscriptionId=$existingSubId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
             exit 0
           }
-          if (-not (Test-Path -LiteralPath $stageDir)) {
-            Write-Host "No stage0-subscription dir. Skip import."
-            exit 0
-          }
-          Push-Location $stageDir
+
+          # 新規作成
+          $orig = Get-Location
           try {
-            terraform -version | Out-Null
-          } catch {
-            # 最低限のインストール（必要な場合のみ）
-            choco install terraform -y | Out-Null
-          }
-          try {
+            Set-Location $stageDir
             terraform init -no-color
-            $rid = "/providers/Microsoft.Subscription/aliases/$alias"
-            terraform import -no-color azapi_resource.subscription $rid 2>$null
-            if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
-          } finally { Pop-Location }
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
+
+            terraform plan -no-color -var-file="$tfvars" -out plan.out
+            if ($LASTEXITCODE -ne 0) { throw "terraform plan failed" }
+
+            terraform apply -no-color -auto-approve plan.out
+            if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
+          } finally {
+            Set-Location $orig
+          }
+
+          # output or wait
+          $subId = ""
+          try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
+          if (-not $subId) {
+            $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 360 -IntervalSeconds 10
+          }
+
+          if ($subId) {
+            Write-Host "subscriptionId=$subId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+          } else {
+            Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+          }
 
 # =========================================================
 # Stage1: Resource Group
@@ -233,13 +194,13 @@ stages:
   - job: apply_rg
     displayName: "RG作成"
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionId'] ]
-      subscriptionAlias:        $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionAlias'] ]
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
+      subscriptionAlias:        $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionAlias'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - checkout: self
     - task: TerraformInstaller@1
-      displayName: "Install Terraform"
+      displayName: "Install Terraform 1.7.5"
       inputs:
         terraformVersion: '1.7.5'
 
@@ -280,12 +241,12 @@ stages:
   - job: apply_vnet
     displayName: "VNet作成"
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionId'] ]
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - checkout: self
     - task: TerraformInstaller@1
-      displayName: "Install Terraform"
+      displayName: "Install Terraform 1.7.5"
       inputs:
         terraformVersion: '1.7.5'
 
@@ -356,12 +317,12 @@ stages:
   - job: apply_subnet
     displayName: "Subnet + NSG + 関連付け"
     variables:
-      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionId'] ]
+      subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
     condition: and(succeeded(), ne(variables['subscriptionIdFromStage0'], ''))
     steps:
     - checkout: self
     - task: TerraformInstaller@1
-      displayName: "Install Terraform"
+      displayName: "Install Terraform 1.7.5"
       inputs:
         terraformVersion: '1.7.5'
 
@@ -387,7 +348,7 @@ stages:
           } finally { Pop-Location }
 
 # =========================================================
-# Stage4a: Hub -> Spoke
+# Stage4a: Hub -> Spoke  （先に Hub 側）
 # =========================================================
 - stage: stage4a_peering_hub_to_spoke
   displayName: "Stage4a - Peering Hub → Spoke"
@@ -399,7 +360,7 @@ stages:
     - job: peering_hub_to_spoke
       displayName: "Hub → Spoke ピアリング作成"
       variables:
-        spokeSubIdFromS0:    $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionId'] ]
+        spokeSubIdFromS0:    $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
         spokeVnetNameFromS2: $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
         spokeRgNameFromS2:   $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
       condition: and(succeeded(),
@@ -409,7 +370,7 @@ stages:
       steps:
         - checkout: self
         - task: TerraformInstaller@1
-          displayName: "Install Terraform"
+          displayName: "Install Terraform 1.7.5"
           inputs:
             terraformVersion: '1.7.5'
 
@@ -448,7 +409,7 @@ stages:
               } finally { Pop-Location }
 
 # =========================================================
-# Stage4b: Spoke -> Hub
+# Stage4b: Spoke -> Hub  （後で Spoke 側）
 # =========================================================
 - stage: stage4b_peering_spoke_to_hub
   displayName: "Stage4b - Peering Spoke → Hub"
@@ -461,7 +422,7 @@ stages:
     - job: peering_spoke_to_hub
       displayName: "Spoke → Hub ピアリング作成"
       variables:
-        subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.create_alias.outputs['create_alias.subscriptionId'] ]
+        subscriptionIdFromStage0: $[ stageDependencies.stage0_subscription.run_tf.outputs['tf.subscriptionId'] ]
         spokeVnetNameFromS2:      $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeVnetName'] ]
         spokeRgNameFromS2:        $[ stageDependencies.stage2_vnet.apply_vnet.outputs['resolve.spokeRgName'] ]
       condition: and(succeeded(),
@@ -471,7 +432,7 @@ stages:
       steps:
         - checkout: self
         - task: TerraformInstaller@1
-          displayName: "Install Terraform"
+          displayName: "Install Terraform 1.7.5"
           inputs:
             terraformVersion: '1.7.5'
 
@@ -506,6 +467,7 @@ stages:
                 terraform apply -no-color -input=false -auto-approve
               } finally { Pop-Location }
 
+        # 作成できたか“必ず”検証（無ければ失敗にする）
         - task: AzureCLI@2
           displayName: "Verify peering exists (spoke-to-hub)"
           inputs:
