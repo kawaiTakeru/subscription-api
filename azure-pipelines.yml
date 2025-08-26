@@ -64,6 +64,8 @@ stages:
     - task: AzureCLI@2
       name: tf
       displayName: "Terraform init/plan/apply (Stage0)"
+      env:
+        ARM_USE_AZCLI_AUTH: 'true'   # ← 追加：子プロセス(Terraform/AzAPI)にCLI認証を確実に継承
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
