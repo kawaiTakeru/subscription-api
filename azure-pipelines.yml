@@ -171,6 +171,7 @@ stages:
           } else {
             Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+          }
 
 # =========================================================
 # Stage1: Resource Group
