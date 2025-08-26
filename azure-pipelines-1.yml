@@ -8,26 +8,33 @@ pool:
 variables:
   - name: System.Debug
     value: 'true'
+  # 生成するサブスクリプションのワークロード
+  - name: WORKLOAD
+    value: 'Production'          # or 'DevTest'
+  # 作成したサブスクリプションを残すかどうか
+  - name: KEEP_CREATED_SUBSCRIPTION
+    value: 'false'               # 'true' にすると削除しません
+  # エイリアス名の接頭辞（テナント内で一意になるよう時刻でサフィックス付与）
+  - name: ALIAS_PREFIX
+    value: 'crpoc'
 
 stages:
 - stage: probe_billing
   displayName: "Probe: snp-pipeline-api billing reachability"
   jobs:
   - job: run
-    displayName: "WHOAMI / RBAC / Billing probes"
+    displayName: "WHOAMI / RBAC / Billing probes + Alias create test"
     steps:
     - task: AzureCLI@2
-      displayName: "Probe billing roles (REST)"
+      displayName: "Probe billing roles (REST) + create alias"
       inputs:
         azureSubscription: 'snp-pipeline-api'   # Service connection name
-        scriptType: pscore                      # Use PowerShell Core (UTF-8 by default)
+        scriptType: pscore                      # PowerShell Core (UTF-8)
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
           $ProgressPreference    = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-          # Be explicit about UTF-8 just in case
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $env:PYTHONIOENCODING = 'utf-8'
 
@@ -49,24 +56,22 @@ stages:
           Write-Host "spObjId  : $spObjId"
           Write-Host ""
 
-          # RBAC at root (for reference only)
+          # RBAC (reference)
           Write-Host "== RBAC at root (reference) =="
           az role assignment list --assignee $appId --all -o table --only-show-errors
           Write-Host ""
 
           $api = "2024-04-01"
           $found = @()
+          $accs = $null
 
-          # List Billing Accounts
+          # Billing accounts
           try {
             $accs = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api").value
           } catch {
             throw "Cannot list billingAccounts. Likely missing Billing Account reader permission."
           }
-
-          if (-not $accs -or $accs.Count -eq 0) {
-            throw "No billingAccounts visible. Missing permissions."
-          }
+          if (-not $accs -or $accs.Count -eq 0) { throw "No billingAccounts visible. Missing permissions." }
 
           foreach ($acc in $accs) {
             $accName = $acc.name
@@ -77,12 +82,7 @@ stages:
             $rolesA = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingRoleAssignments?api-version=$api").value
             if ($rolesA) {
               $mineA  = $rolesA | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                [PSCustomObject]@{
-                  Scope          = "BillingAccount"
-                  ScopeName      = $accName
-                  RoleDefinitionId = $_.properties.roleDefinitionId
-                  PrincipalId    = $_.properties.principalId
-                }
+                [PSCustomObject]@{ Scope="BillingAccount"; ScopeName=$accName; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
               }
               if ($mineA) { $found += $mineA }
             }
@@ -97,12 +97,7 @@ stages:
               $rolesP = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/billingRoleAssignments?api-version=$api").value
               if ($rolesP) {
                 $mineP  = $rolesP | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                  [PSCustomObject]@{
-                    Scope            = "BillingProfile"
-                    ScopeName        = "$accName/$pname"
-                    RoleDefinitionId = $_.properties.roleDefinitionId
-                    PrincipalId      = $_.properties.principalId
-                  }
+                  [PSCustomObject]@{ Scope="BillingProfile"; ScopeName="$accName/$pname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
                 }
                 if ($mineP) { $found += $mineP }
               }
@@ -117,12 +112,7 @@ stages:
                 $rolesI = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections/$ivname/billingRoleAssignments?api-version=$api").value
                 if ($rolesI) {
                   $mineI  = $rolesI | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
-                    [PSCustomObject]@{
-                      Scope            = "InvoiceSection"
-                      ScopeName        = "$accName/$pname/$ivname"
-                      RoleDefinitionId = $_.properties.roleDefinitionId
-                      PrincipalId      = $_.properties.principalId
-                    }
+                    [PSCustomObject]@{ Scope="InvoiceSection"; ScopeName="$accName/$pname/$ivname"; RoleDefinitionId=$_.properties.roleDefinitionId; PrincipalId=$_.properties.principalId }
                   }
                   if ($mineI) { $found += $mineI }
                 }
@@ -138,10 +128,68 @@ stages:
             Write-Error "No billing roles found at any scope (Account/Profile/InvoiceSection)."
           }
 
-          $hasInvoice = $found | Where-Object { $_.Scope -eq "InvoiceSection" }
-          if (-not $hasInvoice) {
+          $invoiceRoles = $found | Where-Object { $_.Scope -eq "InvoiceSection" }
+          if (-not $invoiceRoles -or $invoiceRoles.Count -eq 0) {
             throw "No role at InvoiceSection scope. Subscription creation via alias will fail."
           }
 
+          # ---------- Try creating a subscription via Alias ----------
           Write-Host ""
-          Write-Host "OK: Found at least one InvoiceSection-scope billing role for this service principal."
+          Write-Host "== Alias Create Test =="
+
+          # Pick the first InvoiceSection we found (ScopeName is '<billingAccount>/<billingProfile>/<invoiceSection>')
+          $targetScopeName = $invoiceRoles[0].ScopeName
+          $parts = $targetScopeName -split '/'
+          if ($parts.Count -ne 3) { throw "Unexpected ScopeName format: $targetScopeName" }
+
+          $billingScope = "/providers/Microsoft.Billing/billingAccounts/$($parts[0])/billingProfiles/$($parts[1])/invoiceSections/$($parts[2])"
+          Write-Host "Using billingScope: $billingScope"
+
+          $aliasPrefix = "${env:ALIAS_PREFIX}"
+          if (-not $aliasPrefix) { $aliasPrefix = "crpoc" }
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          $aliasName = "$aliasPrefix-$timestamp"
+          $displayName = "poc-$timestamp"
+          $workload = "${env:WORKLOAD}"
+          if (-not $workload) { $workload = "Production" }
+
+          Write-Host "Creating alias: $aliasName  (displayName: $displayName, workload: $workload)"
+          $createJson = az account alias create `
+            --name $aliasName `
+            --billing-scope $billingScope `
+            --display-name $displayName `
+            --workload $workload `
+            -o json --only-show-errors | ConvertFrom-Json
+
+          Write-Host "Alias create request accepted."
+          $subId = $createJson.properties.subscriptionId
+          $state = $createJson.properties.provisioningState
+          Write-Host "SubscriptionId: $subId"
+          Write-Host "ProvisioningState: $state"
+
+          # Poll a few times for state change (best-effort)
+          for ($i=0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 6
+            $show = az account alias show -n $aliasName -o json --only-show-errors | ConvertFrom-Json
+            $state = $show.properties.provisioningState
+            Write-Host "  Poll[$i] state: $state"
+            if ($state -eq "Succeeded") { break }
+          }
+
+          if ($state -ne "Succeeded") {
+            Write-Warning "Alias provisioning state is '$state'."
+          } else {
+            Write-Host "Alias provisioning succeeded."
+          }
+
+          $keep = "${env:KEEP_CREATED_SUBSCRIPTION}"
+          if ($keep -and $keep.ToLower() -eq "true") {
+            Write-Host "KEEP_CREATED_SUBSCRIPTION=true -> Leaving alias/subscription in place."
+          } else {
+            Write-Host "Deleting alias to clean up (this also deletes the created subscription)."
+            az account alias delete -n $aliasName -y --only-show-errors
+            Write-Host "Alias deleted."
+          }
+
+          Write-Host ""
+          Write-Host "OK: Alias create test completed."
