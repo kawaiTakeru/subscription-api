@@ -1,109 +1,138 @@
+# billing-probe.yml
 trigger: none
 pr: none
 
 pool:
-  vmImage: 'windows-latest'
+  vmImage: windows-latest
 
 variables:
-  System.Debug: 'true'
-  # Optional: set your billing account id to probe deeper, otherwise leave empty
-  # Example: 00000000-0000-0000-0000-000000000000:11111111-2222-3333-4444-555555555555_2019-05-31
-  BILLING_ACCOUNT_ID: ''
+  - name: System.Debug
+    value: 'true'
 
 stages:
-- stage: debug
-  displayName: Debug SP identity and billing access
+- stage: probe_billing
+  displayName: "Probe: snp-pipeline-api Billing Access"
   jobs:
-  - job: probe
+  - job: run
+    displayName: "WHOAMI / RBAC / Billing probes"
     steps:
     - task: AzureCLI@2
-      displayName: WHOAMI / RBAC / Billing probes
+      displayName: "WHOAMI / RBAC / Billing probes"
       inputs:
-        azureSubscription: 'snp-pipeline-api'
+        azureSubscription: 'snp-pipeline-api'   # ←あなたの Service connection 名
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
-          # Make console UTF-8 to reduce encoding noise (still keep ASCII in our strings)
-          [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-          Write-Host "=== WHOAMI (Service Connection Identity) ==="
-          $acct = az account show --only-show-errors | ConvertFrom-Json
-          $clientId = $acct.user.name
-          $tenantId = $acct.tenantId
-          $subs = az account list -o json --only-show-errors | ConvertFrom-Json
+          # 1) 実際にログインしている ID を確認（Service Connection の実体）
+          $account   = az account show | ConvertFrom-Json
+          $appId     = $account.user.name
+          $tenantId  = $account.tenantId
+          Write-Host "== Azure CLI WHOAMI =="
+          Write-Host "  tenantId : $tenantId"
+          Write-Host "  appId    : $appId"
 
-          $sp = az ad sp show --id $clientId --only-show-errors | ConvertFrom-Json
-          $spName  = $sp.displayName
+          $sp = az ad sp show --id $appId | ConvertFrom-Json
           $spObjId = $sp.id
-
-          Write-Host ("SP Display Name : {0}" -f $spName)
-          Write-Host ("ClientId (AppId): {0}" -f $clientId)
-          Write-Host ("ObjectId        : {0}" -f $spObjId)
-          Write-Host ("TenantId        : {0}" -f $tenantId)
+          Write-Host "  spObjId  : $spObjId"
           Write-Host ""
 
-          Write-Host "=== Azure RBAC role assignments (all scopes reachable) ==="
-          try {
-            az role assignment list --assignee $spObjId --all -o table
-          } catch {
-            Write-Warning "Failed to list Azure RBAC role assignments."
-          }
+          # 2) 参考: ルート(RBAC)のロール割当て
+          Write-Host "== RBAC role assignments (root scope sample) =="
+          az role assignment list --assignee $appId --all -o table
           Write-Host ""
 
-          # Billing extension (safe to add if missing)
-          try {
-            if (-not (az extension list -o tsv | Select-String -SimpleMatch "billing")) {
-              az extension add --name billing --only-show-errors
-            }
-          } catch {
-            Write-Warning "Could not add billing extension (optional)."
+          # 3) Billing ロールを REST で確認
+          $api = "2024-04-01"
+
+          function Get-Json($url) {
+            $out = az rest --method get --url $url
+            if ($LASTEXITCODE -ne 0 -or -not $out) { throw "az rest failed: $url" }
+            return ($out | ConvertFrom-Json)
           }
 
-          $api="2024-04-01"
-          Write-Host "=== Probe 1: List billing accounts (global) ==="
-          try {
-            $resp = az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api" --only-show-errors
-            if ($resp) {
-              Write-Host "[OK] Able to list billingAccounts (read works)."
-            } else {
-              Write-Warning "[NG] billingAccounts returned empty body."
-            }
-          } catch {
-            Write-Warning "[NG] Listing billingAccounts failed. Likely missing Billing roles (e.g. Invoice Section or Billing Profile or Billing Account role)."
-            Write-Host $_.Exception.Message
+          $found = @()
+
+          # 3-1) Billing Accounts
+          $accs = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api").value
+          if (-not $accs -or $accs.Count -eq 0) {
+            throw "この ID では Billing Account に読み取り権限がありません（一覧が 0 件）。"
           }
-          Write-Host ""
 
-          # Optional: direct scope probe if you know the BA ID
-          $baId = "$(BILLING_ACCOUNT_ID)"
-          if ($baId -and $baId.Trim() -ne "") {
-            Write-Host ("=== Probe 2: Direct read at billing account scope: {0} ===" -f $baId)
-            $baScope = "/providers/Microsoft.Billing/billingAccounts/$baId"
-            try {
-              az rest --method get --url "https://management.azure.com$baScope?api-version=$api" --only-show-errors | Out-Null
-              Write-Host "[OK] Able to read specified billing account scope."
-            } catch {
-              Write-Warning "[NG] Cannot read specified billing account scope. Billing role missing at this scope."
-            }
-            Write-Host ""
+          foreach ($acc in $accs) {
+            $accName = $acc.name
+            Write-Host ">> Billing Account: $($acc.properties.displayName)  (name=$accName)"
 
-            # If readable, try listing role assignments at billing scope (if API available in your tenant)
-            try {
-              $ra = az rest --method get --url "https://management.azure.com$baScope/billingRoleAssignments?api-version=$api" --only-show-errors
-              if ($ra) {
-                Write-Host "[INFO] billingRoleAssignments at specified scope:"
-                Write-Host $ra
-              } else {
-                Write-Host "[INFO] No billingRoleAssignments listed (or empty)."
+            # account scope のロール
+            $rolesA = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingRoleAssignments?api-version=$api").value
+            $mineA  = $rolesA | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+              [PSCustomObject]@{
+                Scope = "Billing Account"
+                ScopeName = $accName
+                RoleDefinitionId = $_.properties.roleDefinitionId
+                PrincipalId = $_.properties.principalId
               }
-            } catch {
-              Write-Warning "Could not list billingRoleAssignments at this scope (API/permission may not be available)."
+            }
+            if ($mineA) { $found += $mineA }
+
+            # 3-2) Profiles
+            $profiles = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles?api-version=$api").value
+            foreach ($p in $profiles) {
+              $pname = $p.name
+              Write-Host "   - Billing Profile: $($p.properties.displayName) (name=$pname)"
+
+              $rolesP = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/billingRoleAssignments?api-version=$api").value
+              $mineP  = $rolesP | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+                [PSCustomObject]@{
+                  Scope = "Billing Profile"
+                  ScopeName = "$accName/$pname"
+                  RoleDefinitionId = $_.properties.roleDefinitionId
+                  PrincipalId = $_.properties.principalId
+                }
+              }
+              if ($mineP) { $found += $mineP }
+
+              # 3-3) Invoice Sections
+              $invoices = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections?api-version=$api").value
+              foreach ($iv in $invoices) {
+                $ivname = $iv.name
+                Write-Host "       * Invoice Section: $($iv.properties.displayName) (name=$ivname)"
+
+                $rolesI = (Get-Json "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$accName/billingProfiles/$pname/invoiceSections/$ivname/billingRoleAssignments?api-version=$api").value
+                $mineI  = $rolesI | Where-Object { $_.properties.principalId -eq $spObjId } | ForEach-Object {
+                  [PSCustomObject]@{
+                    Scope = "Invoice Section"
+                    ScopeName = "$accName/$pname/$ivname"
+                    RoleDefinitionId = $_.properties.roleDefinitionId
+                    PrincipalId = $_.properties.principalId
+                  }
+                }
+                if ($mineI) { $found += $mineI }
+              }
             }
           }
 
           Write-Host ""
-          Write-Host "=== Subscription summary (state/name) from current login ==="
-          $subs | Sort-Object -Property name | ForEach-Object {
-            "{0} | {1} | {2}" -f $_.id, $_.name, $_.state
+          Write-Host "== Billing role assignments for this SP =="
+          if ($found.Count -gt 0) {
+            $found | Format-Table -AutoSize
+          } else {
+            Write-Error "このサービス プリンシパル($spObjId)には、Billing Account/Profile/Invoice Section のいずれのスコープにも課金ロールが割り当てられていません。"
           }
+
+          # 4) 最低限必要なロールが請求セクション配下に存在するかを判定（共同作成者 or 所有者 相当）
+          $neededIds = @(
+            # 代表的な課金ロールID（環境で異なるため厳密比較はせず、ID が取れたら OK とする）
+            # 必要条件: Invoice Section スコープで 何らかのロール割当てが 1 つ以上
+          )
+
+          $hasInvoiceScope = $found | Where-Object { $_.Scope -eq "Invoice Section" }
+          if (-not $hasInvoiceScope) {
+            throw "請求セクション(Invoice Section) スコープにロールが無いため、サブスクリプション作成は不可です。"
+          }
+
+          Write-Host ""
+          Write-Host "✅ 検証結果: 請求セクションまで到達し、当該 SP のロール割り当てが確認できました。"
