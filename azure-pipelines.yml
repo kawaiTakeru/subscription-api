@@ -3,7 +3,7 @@ trigger: none
 pr: none
 
 pool:
-  vmImage: 'windows-latest'   # Microsoft-hosted Windows agent
+  vmImage: 'windows-2022'   # Pin to Windows Server 2022
 
 variables:
   - name: System.Debug
@@ -71,6 +71,9 @@ stages:
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+          # Use Azure CLI auth for azurerm/azapi
+          $env:ARM_USE_AZCLI_AUTH = "true"
+
           $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
 
@@ -132,7 +135,8 @@ stages:
 
             try {
               Set-Location $stageDir
-              terraform init
+              terraform init -no-color
+              if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
               $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
               terraform import -no-color azapi_resource.subscription $rid 2>$null
               if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
@@ -144,16 +148,21 @@ stages:
 
             Write-Host "subscriptionId=$existingSubId"
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
-            return
+            exit 0
           }
 
           # 新規作成
           $orig = Get-Location
           try {
             Set-Location $stageDir
-            terraform init
-            terraform plan -var-file="$tfvars" -out plan.out
-            terraform apply -auto-approve plan.out
+            terraform init -no-color
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
+
+            terraform plan -no-color -var-file="$tfvars" -out plan.out
+            if ($LASTEXITCODE -ne 0) { throw "terraform plan failed" }
+
+            terraform apply -no-color -auto-approve plan.out
+            if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
           } finally {
             Set-Location $orig
           }
@@ -169,8 +178,7 @@ stages:
             Write-Host "subscriptionId=$subId"
             Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
           } else {
-            Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+            throw "subscriptionId not resolved in Stage0 (alias may still be provisioning or auth failed)."
           }
 
 # =========================================================
@@ -476,3 +484,4 @@ stages:
                 Write-Error "spoke-to-hub peering not found under RG=$(spokeRgNameFromS2) VNet=$(spokeVnetNameFromS2)"
               } else {
                 Write-Host "Peering 'spoke-to-hub' state: $state"
+              }
