@@ -14,10 +14,6 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0"
     }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
-    }
   }
 }
 
@@ -25,29 +21,9 @@ provider "azurerm" {
   features {}
 }
 
-# ★ 重要: AzAPI に Azure CLI 認証を使わせる
+# AzAPI に Azure CLI 認証を使わせる（パイプラインの ARM_USE_AZCLI_AUTH と合わせ技）
 provider "azapi" {
   use_cli = true
-}
-
-# ===== Optional: Billing 読取チェック（条件付き） =====
-# enable_billing_check=false のときは一切呼ばれません
-data "azapi_resource_list" "billing_accounts" {
-  count                  = var.enable_billing_check ? 1 : 0
-  type                   = "Microsoft.Billing/billingAccounts@2020-05-01"
-  parent_id              = "/"
-  response_export_values = ["name"]
-}
-
-resource "null_resource" "check_billing_permission" {
-  # enable されていて、かつ billingAccounts が 0 件なら失敗させる
-  count = var.enable_billing_check
-    ? (length(data.azapi_resource_list.billing_accounts[0].output) > 0 ? 0 : 1)
-    : 0
-
-  provisioner "local-exec" {
-    command = "echo '❌ Billing Account にアクセスできません（権限不足）。Billing側の権限を確認してください。' && exit 1"
-  }
 }
 
 # ===== Build billingScope =====
@@ -74,9 +50,6 @@ resource "azapi_resource" "subscription" {
     read   = "5m"
     delete = "30m"
   }
-
-  # Billing チェックを有効にした場合だけ依存
-  depends_on = var.enable_billing_check ? [null_resource.check_billing_permission] : []
 }
 
 # ===== Read Back (GET) to ensure subscriptionId is available =====
