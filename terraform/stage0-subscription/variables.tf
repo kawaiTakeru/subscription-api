@@ -28,3 +28,10 @@ variable "subscription_workload" {
   type        = string
   default     = "Production"
 }
+
+# 任意の Billing 読み取りチェックを有効化するか（既定: 無効）
+variable "enable_billing_check" {
+  description = "true にすると Billing Account の読み取り可否を事前にチェック（権限が無いと plan で失敗）"
+  type        = bool
+  default     = false
+}
