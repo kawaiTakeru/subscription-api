@@ -1,51 +1,109 @@
 trigger: none
 pr: none
+
 pool:
   vmImage: 'windows-latest'
 
+variables:
+  System.Debug: 'true'
+  # Optional: set your billing account id to probe deeper, otherwise leave empty
+  # Example: 00000000-0000-0000-0000-000000000000:11111111-2222-3333-4444-555555555555_2019-05-31
+  BILLING_ACCOUNT_ID: ''
+
 stages:
 - stage: debug
+  displayName: Debug SP identity and billing access
   jobs:
   - job: probe
     steps:
     - task: AzureCLI@2
-      displayName: "WHOAMI / RBAC / Billing roles"
+      displayName: WHOAMI / RBAC / Billing probes
       inputs:
-        azureSubscription: 'snp-pipeline-api'   # ←あなたのService connection名
+        azureSubscription: 'snp-pipeline-api'
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference = 'Stop'
+          # Make console UTF-8 to reduce encoding noise (still keep ASCII in our strings)
+          [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 
-          # WHOAMI
+          Write-Host "=== WHOAMI (Service Connection Identity) ==="
           $acct = az account show --only-show-errors | ConvertFrom-Json
           $clientId = $acct.user.name
           $tenantId = $acct.tenantId
+          $subs = az account list -o json --only-show-errors | ConvertFrom-Json
+
           $sp = az ad sp show --id $clientId --only-show-errors | ConvertFrom-Json
-          $spDisp  = $sp.displayName
+          $spName  = $sp.displayName
           $spObjId = $sp.id
-          Write-Host "SP Name  : $spDisp"
-          Write-Host "ClientId : $clientId"
-          Write-Host "ObjectId : $spObjId"
-          Write-Host "TenantId : $tenantId"
+
+          Write-Host ("SP Display Name : {0}" -f $spName)
+          Write-Host ("ClientId (AppId): {0}" -f $clientId)
+          Write-Host ("ObjectId        : {0}" -f $spObjId)
+          Write-Host ("TenantId        : {0}" -f $tenantId)
           Write-Host ""
 
-          # RBAC（参考）
-          Write-Host "== Azure RBAC role assignments =="
-          az role assignment list --assignee $spObjId --all -o table
+          Write-Host "=== Azure RBAC role assignments (all scopes reachable) ==="
+          try {
+            az role assignment list --assignee $spObjId --all -o table
+          } catch {
+            Write-Warning "Failed to list Azure RBAC role assignments."
+          }
+          Write-Host ""
 
-          # Billing 拡張
-          if (-not (az extension list -o tsv | Select-String -SimpleMatch "billing")) {
-            az extension add --name billing --only-show-errors
+          # Billing extension (safe to add if missing)
+          try {
+            if (-not (az extension list -o tsv | Select-String -SimpleMatch "billing")) {
+              az extension add --name billing --only-show-errors
+            }
+          } catch {
+            Write-Warning "Could not add billing extension (optional)."
           }
 
           $api="2024-04-01"
-          Write-Host ""
-          Write-Host "== Try list Billing Accounts =="
+          Write-Host "=== Probe 1: List billing accounts (global) ==="
           try {
-            az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api"
-            Write-Host "[OK] billingAccounts list succeeded (少なくとも参照権はある)"
+            $resp = az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=$api" --only-show-errors
+            if ($resp) {
+              Write-Host "[OK] Able to list billingAccounts (read works)."
+            } else {
+              Write-Warning "[NG] billingAccounts returned empty body."
+            }
           } catch {
-            Write-Warning "[NG] billingAccounts list failed（Billing ロール不足の可能性が高い）"
+            Write-Warning "[NG] Listing billingAccounts failed. Likely missing Billing roles (e.g. Invoice Section or Billing Profile or Billing Account role)."
             Write-Host $_.Exception.Message
+          }
+          Write-Host ""
+
+          # Optional: direct scope probe if you know the BA ID
+          $baId = "$(BILLING_ACCOUNT_ID)"
+          if ($baId -and $baId.Trim() -ne "") {
+            Write-Host ("=== Probe 2: Direct read at billing account scope: {0} ===" -f $baId)
+            $baScope = "/providers/Microsoft.Billing/billingAccounts/$baId"
+            try {
+              az rest --method get --url "https://management.azure.com$baScope?api-version=$api" --only-show-errors | Out-Null
+              Write-Host "[OK] Able to read specified billing account scope."
+            } catch {
+              Write-Warning "[NG] Cannot read specified billing account scope. Billing role missing at this scope."
+            }
+            Write-Host ""
+
+            # If readable, try listing role assignments at billing scope (if API available in your tenant)
+            try {
+              $ra = az rest --method get --url "https://management.azure.com$baScope/billingRoleAssignments?api-version=$api" --only-show-errors
+              if ($ra) {
+                Write-Host "[INFO] billingRoleAssignments at specified scope:"
+                Write-Host $ra
+              } else {
+                Write-Host "[INFO] No billingRoleAssignments listed (or empty)."
+              }
+            } catch {
+              Write-Warning "Could not list billingRoleAssignments at this scope (API/permission may not be available)."
+            }
+          }
+
+          Write-Host ""
+          Write-Host "=== Subscription summary (state/name) from current login ==="
+          $subs | Sort-Object -Property name | ForEach-Object {
+            "{0} | {1} | {2}" -f $_.id, $_.name, $_.state
           }
