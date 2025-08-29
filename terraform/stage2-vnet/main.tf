@@ -7,10 +7,7 @@ terraform {
     }
   }
 }
-
-provider "azurerm" {
-  features {}
-}
+provider "azurerm" { features {} }
 
 data "azurerm_resource_group" "rg" {
   name = var.rg_name
@@ -18,12 +15,14 @@ data "azurerm_resource_group" "rg" {
 
 resource "azurerm_virtual_network" "this" {
   name                = var.vnet_name
-  address_space       = var.vnet_address_space
   location            = data.azurerm_resource_group.rg.location
   resource_group_name = data.azurerm_resource_group.rg.name
+
+  # ★ ここがポイント：CIDR直書きの代わりに IPAM プールを指定
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.vnet_number_of_ips
+  }
 }
 
-output "vnet_name" {
-  value = azurerm_virtual_network.this.name
-}
-
+output "vnet_name" { value = azurerm_virtual_network.this.name }
