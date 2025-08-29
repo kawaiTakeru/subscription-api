@@ -29,7 +29,14 @@ variable "subscription_workload" {
   default     = "Production"
 }
 
-# 任意の Billing 読み取りチェックを有効化するか（既定: 無効）
+# 追加：既存 Alias を使うときは false にする
+variable "create_subscription" {
+  description = "サブスクリプション（エイリアス）を新規作成するか。既存を流用する場合は false"
+  type        = bool
+  default     = true
+}
+
+# 任意の Billing 読み取りチェック（必要に応じて使うならそのまま）
 variable "enable_billing_check" {
   description = "true にすると Billing Account の読み取り可否を事前にチェック（権限が無いと plan で失敗）"
   type        = bool
