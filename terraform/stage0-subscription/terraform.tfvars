@@ -5,5 +5,7 @@ billing_profile_name      = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name      = "6HB2-O3GL-PJA-PGB"
 subscription_workload     = "Production"
 
-# 必要なときだけ true にしてください（通常は false のままで OK）
+# 既存エイリアスが “もうある” と分かっている場合は false にする
+# create_subscription        = false
+
 enable_billing_check      = false
