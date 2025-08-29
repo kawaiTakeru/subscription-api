@@ -11,6 +11,8 @@ terraform {
 
 provider "azurerm" {
   features {}
+  # ★ 追加：ここで明示
+  subscription_id = var.subscription_id
 }
 
 data "azurerm_resource_group" "rg" {
