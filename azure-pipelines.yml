@@ -1,9 +1,9 @@
-# subscription-api / azure-pipelines.yml  (Microsoft-hosted 移行版)
+# subscription-api / azure-pipelines.yml  (Microsoft-hosted 版)
 trigger: none
 pr: none
 
 pool:
-  vmImage: 'windows-2022'    # Microsoft-hosted（Windows Server 2022 に固定）
+  vmImage: 'windows-2022'    # Microsoft-hosted（Windows Server 2022）
 
 variables:
   - name: System.Debug
@@ -21,7 +21,7 @@ stages:
     steps:
     - checkout: self
 
-    # Microsoft-hosted なので各ジョブで Terraform を明示インストール
+    # 各ジョブで Terraform を明示インストール
     - task: TerraformInstaller@1
       displayName: "Install Terraform 1.7.5"
       inputs:
@@ -61,12 +61,11 @@ stages:
           Write-Host "== Current role assignments for this SP (all scopes) =="
           az role assignment list --assignee $spObjId --all -o table
 
-    # ★ 修正版：既存 Alias を az rest で検出 → TF_VAR_create_subscription を切替
     - task: AzureCLI@2
       name: tf
       displayName: "Terraform init/plan/apply (Stage0)"
       env:
-        ARM_USE_AZCLI_AUTH: 'true'   # 子プロセス(Terraform/AzAPI)にCLI認証を継承
+        ARM_USE_AZCLI_AUTH: 'true'   # 子プロセス(Terraform/AzAPI)にも CLI 認証を継承
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -75,81 +74,127 @@ stages:
           $ErrorActionPreference = 'Stop'
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $env:ARM_USE_AZCLI_AUTH = "true"
 
-          # ---- paths ----
           $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
 
-          # ---- helpers (RESTで Alias を読む: テナントスコープでも確実) ----
-          function Get-AliasSubId([string]$AliasName) {
-            if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
-            $uri = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$AliasName?api-version=2021-10-01"
+          function Get-Tfvar([string]$Path, [string]$Key) {
+            if (-not (Test-Path -LiteralPath $Path)) { return "" }
+            $regex = '^\s*' + [regex]::Escape($Key) + '\s*=\s*"?([^"]+)"?\s*$'
+            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match $regex } | Select-Object -First 1
+            if ($line) { return ($line -replace $regex, '$1').Trim() }
+            return ""
+          }
+
+          function Get-SubIdFromAny([string]$AliasName, [string]$DisplayName) {
+            # 1) az account alias show
             try {
-              $raw = az rest --method get --url $uri --only-show-errors 2>$null
-              if ($LASTEXITCODE -eq 0 -and $raw) {
-                $obj = $raw | ConvertFrom-Json
-                if ($obj -and $obj.properties -and $obj.properties.subscriptionId) {
-                  return ($obj.properties.subscriptionId)
-                }
+              $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+
+            # 2) az rest (tenant-scope)
+            try {
+              $url = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$AliasName?api-version=2021-10-01"
+              $id = az rest --method get --url $url --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+
+            # 3) az resource show
+            try {
+              $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+              $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+
+            # 4) displayName での突合（重複しない前提）
+            try {
+              if ($DisplayName) {
+                $id = az account subscription list --refresh true --query "[?name=='$DisplayName'].id | [0]" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
               }
             } catch {}
+
             return ""
           }
 
-          function Wait-SubscriptionReady([string]$AliasName, [int]$MaxSeconds, [int]$IntervalSeconds) {
-            $deadline = (Get-Date).AddSeconds($MaxSeconds)
-            while ((Get-Date) -lt $deadline) {
-              $id = Get-AliasSubId -AliasName $AliasName
-              if ($id) { return $id }
-              Start-Sleep -Seconds $IntervalSeconds
-            }
-            return ""
-          }
+          if (-not (Test-Path -LiteralPath $tfvars)) { throw ("terraform.tfvars not found: " + $tfvars) }
 
-          function Get-AliasNameFromTfvars([string]$Path) {
-            if (-not (Test-Path -LiteralPath $Path)) { throw "terraform.tfvars not found: $Path" }
-            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1
-            if (-not $line) { throw "subscription_alias_name is empty in tfvars. Set it first." }
-            return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1')
-          }
+          $aliasName    = Get-Tfvar -Path $tfvars -Key "subscription_alias_name"
+          $displayName  = Get-Tfvar -Path $tfvars -Key "subscription_display_name"
+          if ([string]::IsNullOrWhiteSpace($aliasName)) { throw "subscription_alias_name is empty in tfvars. Set it first." }
 
-          # ---- read alias from tfvars ----
-          $aliasName = Get-AliasNameFromTfvars -Path $tfvars
           Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
-          # ---- detect existing alias via REST ----
-          $existingSubId = Get-AliasSubId -AliasName $aliasName
+          function Do-ImportIfPossible([string]$AliasName) {
+            try {
+              Push-Location $stageDir
+              terraform init -no-color | Out-Null
+              $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
+              terraform import -no-color azapi_resource.subscription $rid 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
+            } catch {
+              Write-Host "terraform import failed but ignored."
+            } finally { Pop-Location }
+          }
+
+          # === 既存チェック ===
+          $existingSubId = Get-SubIdFromAny -AliasName $aliasName -DisplayName $displayName
           if ($existingSubId) {
-            Write-Host "Alias exists: $aliasName (subId=$existingSubId)"
-            $env:TF_VAR_create_subscription = "false"   # ← 重要！
-          } else {
-            Write-Host "Alias not found. Will create: $aliasName"
-            $env:TF_VAR_create_subscription = "true"
+            Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
+            Do-ImportIfPossible -AliasName $aliasName
+            Write-Host "subscriptionId=$existingSubId"
+            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
+            exit 0
           }
 
-          # ---- terraform run (non-interactive) ----
-          Push-Location $stageDir
+          # === 新規作成 ===
+          $orig = Get-Location
+          $applied = $false
           try {
-            terraform init -no-color -input=false
-            terraform plan -no-color -input=false -var-file="$tfvars" -out plan.out
-            terraform apply -no-color -input=false -auto-approve plan.out
+            Set-Location $stageDir
+            terraform init -no-color
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
+
+            terraform plan -no-color -var-file="$tfvars" -out plan.out
+            if ($LASTEXITCODE -ne 0) { throw "terraform plan failed" }
+
+            try {
+              terraform apply -no-color -auto-approve plan.out
+              if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
+              $applied = $true
+            } catch {
+              # リカバリ: 既存や並行作成のケース
+              Write-Warning "terraform apply failed. Try to resolve alias and import..."
+              $reSubId = Get-SubIdFromAny -AliasName $aliasName -DisplayName $displayName
+              if ($reSubId) {
+                Write-Host "Detected existing alias after apply error. Treat as success. subId=$reSubId"
+                Do-ImportIfPossible -AliasName $aliasName
+                Write-Host "subscriptionId=$reSubId"
+                Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$reSubId"
+                exit 0
+              }
+              throw
+            }
           } finally {
-            Pop-Location
+            Set-Location $orig
           }
 
-          # ---- resolve subscriptionId ----
-          $subId = ""
-          try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
-          if (-not $subId) {
-            if ($existingSubId) { $subId = $existingSubId } else { $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 360 -IntervalSeconds 10 }
-          }
-
-          if ($subId) {
-            Write-Host "subscriptionId=$subId"
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
-          } else {
-            Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+          # === 出力（apply 成功時） ===
+          if ($applied) {
+            $subId = ""
+            try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
+            if (-not $subId) {
+              $subId = Get-SubIdFromAny -AliasName $aliasName -DisplayName $displayName
+            }
+            if ($subId) {
+              Write-Host "subscriptionId=$subId"
+              Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$subId"
+            } else {
+              Write-Warning "subscriptionId not resolved in Stage0 (alias may still be provisioning)."
+              Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]"
+            }
           }
 
 # =========================================================
@@ -436,7 +481,7 @@ stages:
                 terraform apply -no-color -input=false -auto-approve
               } finally { Pop-Location }
 
-        # 作成できたか“必ず”検証（無ければ失敗にする）
+        # 作成できたか“必ず”検証（無ければ失敗）
         - task: AzureCLI@2
           displayName: "Verify peering exists (spoke-to-hub)"
           inputs:
