@@ -61,11 +61,12 @@ stages:
           Write-Host "== Current role assignments for this SP (all scopes) =="
           az role assignment list --assignee $spObjId --all -o table
 
+    # ★ 修正版：既存 Alias を az rest で検出 → TF_VAR_create_subscription を切替
     - task: AzureCLI@2
       name: tf
       displayName: "Terraform init/plan/apply (Stage0)"
       env:
-        ARM_USE_AZCLI_AUTH: 'true'   # ← 追加：子プロセス(Terraform/AzAPI)にCLI認証を確実に継承
+        ARM_USE_AZCLI_AUTH: 'true'   # 子プロセス(Terraform/AzAPI)にCLI認証を継承
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -75,29 +76,22 @@ stages:
           $ProgressPreference = 'SilentlyContinue'
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-          # ★ 重要: AzAPI/azurerm が Azure CLI の資格情報を使うように固定（MSI/IMDS へ倒れない）
-          $env:ARM_USE_AZCLI_AUTH = "true"
-
+          # ---- paths ----
           $stageDir = "$(Build.SourcesDirectory)\terraform\stage0-subscription"
           $tfvars   = "$(Build.SourcesDirectory)\terraform\stage0-subscription\terraform.tfvars"
 
-          function Get-AliasNameFromTfvars([string]$Path) {
-            if (-not (Test-Path -LiteralPath $Path)) { return "" }
-            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1
-            if ($line) { return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1') }
-            return ""
-          }
-
-          function Get-SubIdViaAz([string]$AliasName) {
+          # ---- helpers (RESTで Alias を読む: テナントスコープでも確実) ----
+          function Get-AliasSubId([string]$AliasName) {
             if ([string]::IsNullOrWhiteSpace($AliasName)) { return "" }
+            $uri = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$AliasName?api-version=2021-10-01"
             try {
-              $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
-              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-            } catch {}
-            try {
-              $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
-              $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
-              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              $raw = az rest --method get --url $uri --only-show-errors 2>$null
+              if ($LASTEXITCODE -eq 0 -and $raw) {
+                $obj = $raw | ConvertFrom-Json
+                if ($obj -and $obj.properties -and $obj.properties.subscriptionId) {
+                  return ($obj.properties.subscriptionId)
+                }
+              }
             } catch {}
             return ""
           }
@@ -105,76 +99,49 @@ stages:
           function Wait-SubscriptionReady([string]$AliasName, [int]$MaxSeconds, [int]$IntervalSeconds) {
             $deadline = (Get-Date).AddSeconds($MaxSeconds)
             while ((Get-Date) -lt $deadline) {
-              $id = ""
-              try {
-                $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
-                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-              } catch {}
-              try {
-                $rid = "/providers/Microsoft.Subscription/aliases/$AliasName"
-                $id = az resource show --ids $rid --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
-                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-              } catch {}
+              $id = Get-AliasSubId -AliasName $AliasName
+              if ($id) { return $id }
               Start-Sleep -Seconds $IntervalSeconds
             }
             return ""
           }
 
-          if (-not (Test-Path -LiteralPath $tfvars)) {
-            throw ("terraform.tfvars not found: " + $tfvars)
+          function Get-AliasNameFromTfvars([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path)) { throw "terraform.tfvars not found: $Path" }
+            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match '^\s*subscription_alias_name\s*=' } | Select-Object -First 1
+            if (-not $line) { throw "subscription_alias_name is empty in tfvars. Set it first." }
+            return ($line -replace '^\s*subscription_alias_name\s*=\s*"?([^"]+)"?\s*$', '$1')
           }
 
+          # ---- read alias from tfvars ----
           $aliasName = Get-AliasNameFromTfvars -Path $tfvars
-          if ([string]::IsNullOrWhiteSpace($aliasName)) {
-            throw "subscription_alias_name is empty in tfvars. Set it first."
-          }
-
-          # 出力変数
           Write-Host "##vso[task.setvariable variable=subscriptionAlias;isOutput=true]$aliasName"
 
-          # 既存 alias チェック
-          $existingSubId = Get-SubIdViaAz -AliasName $aliasName
+          # ---- detect existing alias via REST ----
+          $existingSubId = Get-AliasSubId -AliasName $aliasName
           if ($existingSubId) {
-            Write-Host "Alias already exists. Skip Terraform. alias=$aliasName subId=$existingSubId"
-
-            try {
-              Set-Location $stageDir
-              terraform init -no-color
-              $rid = "/providers/Microsoft.Subscription/aliases/$aliasName"
-              terraform import -no-color azapi_resource.subscription $rid 2>$null
-              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import skipped (not critical)." }
-            } catch {
-              Write-Host "terraform import failed but ignored."
-            } finally {
-              Set-Location "$(Build.SourcesDirectory)"
-            }
-
-            Write-Host "subscriptionId=$existingSubId"
-            Write-Host "##vso[task.setvariable variable=subscriptionId;isOutput=true]$existingSubId"
-            exit 0
+            Write-Host "Alias exists: $aliasName (subId=$existingSubId)"
+            $env:TF_VAR_create_subscription = "false"   # ← 重要！
+          } else {
+            Write-Host "Alias not found. Will create: $aliasName"
+            $env:TF_VAR_create_subscription = "true"
           }
 
-          # 新規作成
-          $orig = Get-Location
+          # ---- terraform run (non-interactive) ----
+          Push-Location $stageDir
           try {
-            Set-Location $stageDir
-            terraform init -no-color
-            if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
-
-            terraform plan -no-color -var-file="$tfvars" -out plan.out
-            if ($LASTEXITCODE -ne 0) { throw "terraform plan failed" }
-
-            terraform apply -no-color -auto-approve plan.out
-            if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
+            terraform init -no-color -input=false
+            terraform plan -no-color -input=false -var-file="$tfvars" -out plan.out
+            terraform apply -no-color -input=false -auto-approve plan.out
           } finally {
-            Set-Location $orig
+            Pop-Location
           }
 
-          # output or wait
+          # ---- resolve subscriptionId ----
           $subId = ""
           try { $subId = terraform -chdir="$stageDir" output -raw subscription_id } catch {}
           if (-not $subId) {
-            $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 360 -IntervalSeconds 10
+            if ($existingSubId) { $subId = $existingSubId } else { $subId = Wait-SubscriptionReady -AliasName $aliasName -MaxSeconds 360 -IntervalSeconds 10 }
           }
 
           if ($subId) {
