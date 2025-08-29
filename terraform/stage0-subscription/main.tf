@@ -4,15 +4,15 @@
 #############################################
 
 terraform {
-  required_version = ">= 1.4.0"
+  required_version = ">= 1.5.0"
   required_providers {
     azapi = {
       source  = "azure/azapi"
-      version = "~> 1.0"
+      version = "~> 1.15"
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 4.41"
     }
   }
 }
@@ -24,9 +24,8 @@ provider "azurerm" {
 # AzAPI に Azure CLI 認証を使わせる（パイプラインの ARM_USE_AZCLI_AUTH と合わせ技）
 provider "azapi" {
   use_cli = true
-  use_msi = false  # IMDSを使わない
+  use_msi = false
 }
-
 
 # ===== Build billingScope =====
 locals {
@@ -34,7 +33,9 @@ locals {
 }
 
 # ===== Create Subscription (Alias API) =====
+# 既存を流用するときは var.create_subscription = false にする
 resource "azapi_resource" "subscription" {
+  count     = var.create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = var.subscription_alias_name
   parent_id = "/"
@@ -55,19 +56,22 @@ resource "azapi_resource" "subscription" {
 }
 
 # ===== Read Back (GET) to ensure subscriptionId is available =====
+# ・新規作成時: create -> その後に GET
+# ・既存流用時: いきなり GET
 data "azapi_resource" "subscription_get" {
   type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = azapi_resource.subscription.name
+  name      = var.subscription_alias_name
   parent_id = "/"
 
   response_export_values = ["properties.subscriptionId"]
 
+  # count=0 の参照でも問題ありません（依存だけ張っておく）
   depends_on = [azapi_resource.subscription]
 }
 
 # ===== Outputs =====
 output "subscription_id" {
-  description = "Created subscriptionId"
+  description = "Created or existing subscriptionId"
   value       = try(data.azapi_resource.subscription_get.output.properties.subscriptionId, null)
 }
 
