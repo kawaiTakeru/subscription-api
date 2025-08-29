@@ -1,8 +1,8 @@
-rg_name            = "rg-from-pipeline"
-vnet_name          = "vnet-from-pipeline"
+rg_name  = "rg-from-pipeline"
+vnet_name = "vnet-from-pipeline"
 
-# あなたの実プールIDを入れる
+# あなたの IPAM プール（root-10-20）のリソースIDをそのまま
 ipam_pool_id       = "/subscriptions/6a018b75-55b5-4b68-960d-7328148568aa/resourceGroups/rg-apim-dev/providers/Microsoft.Network/networkManagers/nm-apimdev-ipam/ipamPools/root-10-20"
 
-# 例：/22 相当（≈ 1024 IP）。必要に応じて増減可。
-vnet_number_of_ips = "1024"
+# 例：/22 相当（= 1024 IP）
+vnet_number_of_ips = 1024
