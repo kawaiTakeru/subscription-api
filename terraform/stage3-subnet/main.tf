@@ -3,17 +3,24 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      # ★ ここも v4 系に更新
+      # AzureRM v4 系を利用（IPAM連携の ip_address_pool を使うため）
       version = "~> 4.41"
     }
   }
 }
 
+# ==== provider ====
+# v4 以降は subscription_id の明示が必須
+variable "subscription_id" { type = string }
+variable "tenant_id"       { type = string }
+
 provider "azurerm" {
   features {}
+  subscription_id = var.subscription_id
+  tenant_id       = var.tenant_id
 }
 
-# 参照
+# ==== 参照データ ====
 data "azurerm_resource_group" "rg" {
   name = var.rg_name
 }
@@ -23,7 +30,7 @@ data "azurerm_virtual_network" "vnet" {
   resource_group_name = data.azurerm_resource_group.rg.name
 }
 
-# NSG（VPN クライアントからのみ許可 + それ以外 Inbound Deny）
+# ==== NSG（VPN クライアントからのみ許可 + それ以外 Inbound Deny）====
 resource "azurerm_network_security_group" "private" {
   name                = var.nsg_name
   location            = data.azurerm_resource_group.rg.location
@@ -54,25 +61,26 @@ resource "azurerm_network_security_group" "private" {
   }
 }
 
-# Subnet（IPAM から /24 相当などを自動割当）
+# ==== Subnet（IPAM から自動割当）====
 resource "azurerm_subnet" "private" {
   name                 = var.subnet_name
   resource_group_name  = data.azurerm_resource_group.rg.name
   virtual_network_name = data.azurerm_virtual_network.vnet.name
 
-  # ★ address_prefixes は使わず、IPAM のプールから自動割当
+  # address_prefixes は使わず、IPAM のプールから自動割当
   ip_address_pool {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.subnet_number_of_ips
   }
 }
 
-# Subnet と NSG を関連付け
+# ==== Subnet と NSG の関連付け ====
 resource "azurerm_subnet_network_security_group_association" "assoc" {
   subnet_id                 = azurerm_subnet.private.id
   network_security_group_id = azurerm_network_security_group.private.id
 }
 
+# ==== 出力 ====
 output "subnet_id" {
   value = azurerm_subnet.private.id
 }
