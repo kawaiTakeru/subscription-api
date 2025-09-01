@@ -1,4 +1,4 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Step targets, Step0 fix with quoted target & debug)
+# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0: existing alias skip or create)
 trigger: none
 pr: none
 
@@ -54,7 +54,7 @@ stages:
           Write-Host "tenantId      : $($acct.tenantId)"
           Write-Host "subscription  : $($acct.name)"
           Write-Host "subscriptionId: $($acct.id)"
-            Write-Host "clientId      : $($acct.user.name)"
+          Write-Host "clientId      : $($acct.user.name)"
           Write-Host ""
           Write-Host "== Role Assignments (current SP) =="
           try {
@@ -96,18 +96,20 @@ stages:
           if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
           $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
           $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
+          $displayName    = Get-TfvarsValue $tfvars "subscription_display_name"
 
-          Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
+          Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, display_name=$displayName, spoke_subscription_id(tfvars)=$spokeSubInVars"
 
           Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
           Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
           Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
+          Write-Host "##vso[task.setvariable variable=displayName]$displayName"
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
-    # Step0 修正: -target を変数化 + [0] 明示 + ディレクトリ/引数デバッグ出力
+    # Step0: 既存 alias チェック → あればスキップ、無ければ作成
     - task: AzureCLI@2
       name: step0
-      displayName: "Step0 - Create Subscription (targeted apply w/ index)"
+      displayName: "Step0 - Ensure Subscription (Skip if exists)"
       condition: and(succeeded(), eq(variables.createSubscriptionFlag, 'true'), eq(variables.spokeSubIdFromTfvars, ''))
       env:
         ARM_USE_AZCLI_AUTH: 'true'
@@ -117,69 +119,106 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir  = "$(tfDir)"
-          $alias  = "$(aliasName)"
+          $tfDir       = "$(tfDir)"
+          $alias       = "$(aliasName)"
+          $displayName = "$(displayName)"
           if (-not $alias) { throw "subscription_alias_name not found in tfvars (empty)" }
 
-          $targetAddress = "azapi_resource.subscription[0]"   # count=1 のインスタンスを明示
-          Write-Host "Target address: $targetAddress"
+          $targetAddress = "azapi_resource.subscription[0]"
+          $aliasRid = "/providers/Microsoft.Subscription/aliases/$alias"
 
+          function Get-SubIdFromAny([string]$AliasName,[string]$DisplayName) {
+            if (-not $AliasName) { return "" }
+            # 1) alias show
+            try {
+              $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+            # 2) REST
+            try {
+              $url = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$AliasName?api-version=2021-10-01"
+              $id = az rest --method get --url $url --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+            # 3) generic resource
+            try {
+              $id = az resource show --ids "/providers/Microsoft.Subscription/aliases/$AliasName" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
+              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+            } catch {}
+            # 4) displayName fallback (非推奨・重複注意)
+            if ($DisplayName) {
+              try {
+                $id = az account subscription list --refresh true --query "[?name=='$DisplayName'].id | [0]" -o tsv 2>$null
+                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
+              } catch {}
+            }
+            return ""
+          }
+
+          function Import-AliasState([string]$AliasName,[string]$TargetAddr,[string]$Rid,[string]$Dir) {
+            try {
+              Push-Location $Dir
+              terraform init -no-color | Out-Null
+              terraform import -no-color $TargetAddr $Rid 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import non-zero (may already be in state). Ignored." }
+            } catch {
+              Write-Host "Import attempt failed (ignored): $($_.Exception.Message)"
+            } finally {
+              Pop-Location
+            }
+          }
+
+          Write-Host "== Step0: Existing alias probe =="
+          $existingSubId = Get-SubIdFromAny -AliasName $alias -DisplayName $displayName
+          if ($existingSubId) {
+            Write-Host "Alias already exists. Skipping creation. alias=$alias subId=$existingSubId"
+            Import-AliasState -AliasName $alias -TargetAddr $targetAddress -Rid $aliasRid -Dir $tfDir
+            Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existingSubId"
+            return
+          }
+
+            # Create new alias (targeted apply)
+          Write-Host "Alias not found. Creating..."
           Push-Location $tfDir
+          $created = $false
           try {
-            Write-Host "== List files (debug) =="
-            Get-ChildItem -Force | ForEach-Object { Write-Host "FILE: $($_.Name)" }
-
-            Write-Host "== terraform version =="
-            terraform version
-
-            Write-Host "== terraform init =="
+            Write-Host "terraform init"
             terraform init -no-color
             if ($LASTEXITCODE -ne 0) { throw "terraform init failed." }
 
-            # 既存 alias チェック (事前スキップ)
-            $existing = ""
-            try {
-              $existing = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
-            } catch {}
-            if ($existing) {
-              Write-Host "Alias already exists: $alias -> $existing (skip creation)"
-              Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existing"
-              return
-            }
-
-            Write-Host "== terraform apply (single target) =="
-            $cmd = @("apply","-no-color","-auto-approve","-target=$targetAddress")
-            Write-Host ("Exec: terraform " + ($cmd -join ' '))
-            terraform @cmd
+            Write-Host "terraform apply -target=$targetAddress"
+            terraform apply -no-color -auto-approve -target=$targetAddress
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "First targeted apply failed. Dumping retry context..."
-              Write-Host "Retry once with quoted target..."
-              terraform apply -no-color -auto-approve "-target=$targetAddress"
-              if ($LASTEXITCODE -ne 0) {
-                throw "terraform apply (target) failed after retry."
-              }
+              Write-Warning "Initial apply failed (exit $LASTEXITCODE). Checking if alias appeared..."
+            } else {
+              $created = $true
             }
-
-            # Output / 取得
-            $subId = ""
-            try { $subId = terraform output -raw subscription_id 2>$null } catch {}
-            if (-not $subId) {
-              Write-Host "terraform output 'subscription_id' empty. Polling alias (up to 5m)..."
-              for ($i=0; $i -lt 30 -and -not $subId; $i++) {
-                Start-Sleep -Seconds 10
-                try {
-                  $subId = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
-                  if ($subId) { break }
-                } catch {}
-              }
-            }
-            if (-not $subId) { throw "Failed to resolve subscriptionId for alias $alias" }
-
-            Write-Host "Resolved subscriptionId=$subId"
-            Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
+          } catch {
+            Write-Warning "Apply threw exception: $($_.Exception.Message)"
           } finally {
             Pop-Location
           }
+
+          # Resolve subscriptionId (poll up to 6m)
+          $subId = ""
+          $maxAttempts = 36
+          for ($i=0; $i -lt $maxAttempts -and -not $subId; $i++) {
+            $subId = Get-SubIdFromAny -AliasName $alias -DisplayName $displayName
+            if ($subId) { break }
+            Start-Sleep -Seconds 10
+          }
+
+          if (-not $subId) {
+            throw "Alias creation (or detection) failed: subscriptionId not found after ${( $maxAttempts * 10 )} seconds."
+          }
+
+          Write-Host "subscriptionId acquired: $subId"
+          # Import into state if apply failed but alias exists
+          if (-not $created) {
+            Write-Host "Apply was not confirmed successful; importing alias into state..."
+            Import-AliasState -AliasName $alias -TargetAddr $targetAddress -Rid $aliasRid -Dir $tfDir
+          }
+          Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
 
     - task: PowerShell@2
       name: decideSub
