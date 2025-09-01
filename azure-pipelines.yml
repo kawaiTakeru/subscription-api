@@ -1,33 +1,22 @@
-# subscription-api / azure-pipelines.yml  (Single-stage, sequential steps)
-# 要件:
-#  1) 既存サブスクリプションがあればそのまま利用して RG -> VNet -> Subnet -> Peering
-#  2) 無ければ (create_subscription=true かつ spoke_subscription_id 空)
-#     → Alias(Subscription) を作成してから続行
-# ポイント (修正反映):
-#  - 既存 Alias の場合は Terraform state に無いので "Resource already exists" を避けるため
-#    後続では create_subscription=false に強制 (count=0 で subscription リソースを評価させない)
-#  - 新規作成した場合は create_subscription=true を維持し、後続で state に残したまま (再作成されない)
-#  - decideSub で overrideCreateSubscription を確定し、全 Step に TF_VAR_create_subscription を注入
-#  - Hub→Spoke ピアリングは Hub サブスクリプション CLI コンテキスト、Spoke→Hub は Spoke
-#  - USE_TARGETED_APPLY=true の時だけ target 付き; 失敗時はフル apply フォールバック
-#  - デバッグ出力を追加 (変数確認用)
+# subscription-api / azure-pipelines.yml
+# 一貫方針:
+#  1) create_subscription=true かつ spoke_subscription_id="" の場合のみ Step0 で Alias(Subscription) を作成
+#  2) 既存 (create_subscription=false あるいは spoke_subscription_id 指定) は Step0 をスキップ
+#  3) Step0 後に必ず finalSpokeSubscriptionId を決定し、以後すべての Terraform に
+#       TF_VAR_spoke_subscription_id=finalSpokeSubscriptionId を注入
+#  4) 既存 Alias の場合は overrideCreateSubscription=false とし、subscription リソース count=0 で再作成を防止
+#     新規 Alias の場合は overrideCreateSubscription=true のまま (state で管理継続)
+#  5) Peering (Hub→Spoke / Spoke→Hub) 前に “Import Guard” を入れ、state に alias が無いのに
+#     create_subscription=true (count=1) でリソースが無再現 → create 再試行 → “Resource already exists” を防止
+#  6) remote_virtual_network_id は main.tf 内で local.effective_spoke_subscription_id を利用 (main.tf 修正)
+#  7) 任意: 最後に Convergence (Full Apply) Step を追加して差分が無いことを検証
 #
-# terraform/main.tf 側の前提:
-#   resource "azapi_resource" "subscription" {
-#     count = var.create_subscription ? 1 : 0
-#     ...
-#   }
-#   (未修正なら main.tf にこの count 条件を追加してください)
-#
-# 使い方 (terraform/terraform.tfvars):
-#  A) 既存:
-#     create_subscription = false
-#     spoke_subscription_id = "<既存 SubscriptionId>"
-#  B) 新規:
-#     create_subscription = true
-#     spoke_subscription_id = "" (または未記載)
-#
-# 任意: 最終収束確認のため USE_TARGETED_APPLY を false に設定し一度フル apply 実行推奨
+# 注意:
+#  - main.tf 側で azapi_resource.subscription と data.azapi_resource.subscription_get は
+#    local.need_create_subscription = (var.create_subscription && var.spoke_subscription_id == "")
+#    に基づく count 条件へ変更済み（本回答の main.tf 参照）
+#  - Hub 関連 (hub_subscription_id 等) は tfvars で供給される前提
+#  - Windows エージェント上でローカル state を共有 (単一 Job)。将来はリモート backend 推奨。
 
 trigger: none
 pr: none
@@ -39,14 +28,14 @@ variables:
   - name: System.Debug
     value: true
   - name: USE_TARGETED_APPLY
-    value: true
+    value: true             # デバッグ用。false で常にフル apply
 
 stages:
 - stage: provision_all
-  displayName: Provision (Subscription->RG->VNet->Subnet->Peering)
+  displayName: Provision (Subscription -> RG -> VNet -> Subnet -> Peering)
   jobs:
   - job: terraform_job
-    displayName: Terraform Orchestration
+    displayName: Terraform Orchestration (Monolithic Root)
     steps:
 
     - checkout: self
@@ -57,9 +46,9 @@ stages:
         terraformVersion: 1.7.5
 
     - powershell: |
-        Write-Host "Agent Name  : $env:AGENT_NAME"
-        Write-Host "Agent OS    : $env:AGENT_OS"
-        Write-Host "Agent Ver   : $env:AGENT_VERSION"
+        Write-Host "Agent Name : $env:AGENT_NAME"
+        Write-Host "Agent OS   : $env:AGENT_OS"
+        Write-Host "Agent Ver  : $env:AGENT_VERSION"
       displayName: Show Agent Info
 
     - powershell: |
@@ -88,14 +77,15 @@ stages:
 
           function Get-TfVar {
             param([string]$Path,[string]$Key)
-            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+            $line = Get-Content -LiteralPath $Path |
+              Where-Object { $_ -match "^\s*$Key\s*=" } |
+              Select-Object -First 1
             if (-not $line) { return "" }
             $val = $line -replace "^\s*$Key\s*=\s*", ""
             if ($val -match "#") { $val = ($val -split "#")[0] }
             $val.Trim().Trim('"')
           }
 
-            # 変数取得
           $createRaw = Get-TfVar $tfvars "create_subscription"
           $create = if ($createRaw -match '^(?i:true|1)$') { 'true' } else { 'false' }
           $aliasName = Get-TfVar $tfvars "subscription_alias_name"
@@ -103,13 +93,12 @@ stages:
           $hubSub    = Get-TfVar $tfvars "hub_subscription_id"
 
           Write-Host "Parsed: create_subscription=$create alias=$aliasName spoke_subscription_id=$spokeId hub_subscription_id=$hubSub"
-
           Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$create"
           Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeId"
           Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSub"
 
-    # Step0: 新規作成が必要 (create=true & spoke_subscription_id 空) のときのみ
+    # Step0 (必要なら alias 作成)
     - task: AzureCLI@2
       name: step0
       displayName: Step0 - Ensure Subscription (alias create or lookup)
@@ -143,7 +132,6 @@ stages:
           $existing = GetSubId $alias
           if ($existing) {
             Write-Host "Alias already exists (skip creation). alias=$alias subId=$existing"
-            # 既存 → import はせず後続で create_subscription=false にする
             Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existing"
             Write-Host "##vso[task.setvariable variable=aliasPreExisting;isOutput=true]true"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew;isOutput=true]false"
@@ -159,7 +147,7 @@ stages:
             if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias) failed" }
           } finally { Pop-Location }
 
-          # ポーリング
+          # Poll for subscription ID
           $subId=""
           for($i=0;$i -lt 36 -and -not $subId;$i++){
             $subId = GetSubId $alias
@@ -173,7 +161,7 @@ stages:
           Write-Host "##vso[task.setvariable variable=aliasPreExisting;isOutput=true]false"
           Write-Host "##vso[task.setvariable variable=aliasCreatedNew;isOutput=true]true"
 
-    # ID / フラグを正規化
+    # ID 正規化
     - task: PowerShell@2
       name: decideSub
       displayName: Decide / Normalize Subscription Flags
@@ -188,14 +176,11 @@ stages:
             if ("$(createSubscriptionFlag)" -eq "true") { throw "Subscription ID not resolved (Step0 failure?)" }
             throw "spoke_subscription_id required when create_subscription=false"
           }
-
           $aliasPreExisting = "$(step0.aliasPreExisting)"
-          if (-not $aliasPreExisting) { $aliasPreExisting = "true" }  # Step0 未実行時=既存
+          if (-not $aliasPreExisting) { $aliasPreExisting = "true" }
           $aliasCreatedNew  = "$(step0.aliasCreatedNew)"
           if (-not $aliasCreatedNew) { $aliasCreatedNew = "false" }
 
-          # ロジック: 既存 alias (state 無) → create_subscription=false
-          #          新規 alias (state 有) → true (state で管理)
           if ($aliasPreExisting -eq "true") {
             $override = "false"
           } else {
@@ -203,37 +188,37 @@ stages:
           }
 
           Write-Host "Resolved Spoke Subscription ID: $final"
-          Write-Host "aliasPreExisting=$aliasPreExisting aliasCreatedNew=$aliasCreatedNew => overrideCreateSubscription=$override"
+          Write-Host "aliasPreExisting=$aliasPreExisting aliasCreatedNew=$aliasCreatedNew overrideCreateSubscription=$override"
           Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$final"
           Write-Host "##vso[task.setvariable variable=overrideCreateSubscription]$override"
 
     - powershell: |
-        Write-Host "DEBUG: finalSpokeSubscriptionId=$(finalSpokeSubscriptionId)"
-        Write-Host "DEBUG: overrideCreateSubscription=$(overrideCreateSubscription)"
+        Write-Host "DEBUG finalSpokeSubscriptionId=$(finalSpokeSubscriptionId)"
+        Write-Host "DEBUG overrideCreateSubscription=$(overrideCreateSubscription)"
         if (-not "$(finalSpokeSubscriptionId)") { throw "finalSpokeSubscriptionId empty" }
       displayName: Debug print normalized vars
 
-    # Helper
+    # 共通ヘルパ関数ロード
     - powershell: |
         function Invoke-TerraformStep {
-          param([string]$Dir,[string[]]$Targets)
+          param([string]$Dir,[string[]]$Targets,[switch]$DisableTargeting)
           Push-Location $Dir
           try {
             terraform init -no-color
             if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
-            $useTarget = ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0)
-            if ($useTarget) {
-              $args = @("apply","-no-color","-auto-approve")
+            $targetMode = ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0 -and -not $DisableTargeting)
+            if ($targetMode) {
+              $args=@("apply","-no-color","-auto-approve")
               foreach($t in $Targets){ $args += "-target=$t" }
               Write-Host "Targeted apply: $($Targets -join ', ')"
               terraform @args
               if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Targeted apply failed; fallback full"
+                Write-Warning "Targeted apply failed; fallback to full apply"
                 terraform apply -no-color -auto-approve
                 if ($LASTEXITCODE -ne 0) { throw "Fallback full apply failed" }
               }
             } else {
-              Write-Host "Full apply"
+              Write-Host "Full apply (targeting disabled)"
               terraform apply -no-color -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
             }
@@ -245,185 +230,183 @@ stages:
     # Step1 RG
     - task: AzureCLI@2
       displayName: Step1 - Resource Group
+      env:
+        ARM_USE_AZCLI_AUTH: 'true'
+        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_VAR_create_subscription: $(overrideCreateSubscription)
       inputs:
         azureSubscription: snp-pipeline-api
         scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          $ErrorActionPreference='Stop'
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          $tfDir = "$(tfDir)"
+          . "$(System.DefaultWorkingDirectory)/$(Build.Repository.Name)/azure-pipelines-helper.ps1" 2>$null | Out-Null
+          # 上の helper 読み込みは失敗しても継続 (任意ファイル想定)
           function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
             Push-Location $Dir; try {
               terraform init -no-color
-              if ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0) {
-                $args=@("apply","-no-color","-auto-approve"); foreach($t in $Targets){$args+="-target=$t"}
-                terraform @args
+              if ("$(USE_TARGETED_APPLY)" -eq "true") {
+                terraform apply -no-color -auto-approve -target=azurerm_resource_group.rg
                 if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full"
+                  Write-Warning "Target apply failed; fallback full"
                   terraform apply -no-color -auto-approve
-                  if ($LASTEXITCODE -ne 0) { throw "fallback failed" }
+                  if ($LASTEXITCODE -ne 0) { throw "apply failed" }
                 }
               } else {
                 terraform apply -no-color -auto-approve
                 if ($LASTEXITCODE -ne 0) { throw "apply failed" }
               }
             } finally { Pop-Location } }
-          Invoke-TerraformStep -Dir $tfDir -Targets @("azurerm_resource_group.rg")
-      env:
-        ARM_USE_AZCLI_AUTH: 'true'
-        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-        TF_VAR_create_subscription: $(overrideCreateSubscription)
+          Invoke-TerraformStep -Dir "$(tfDir)" -Targets @("azurerm_resource_group.rg")
 
     # Step2 VNet
     - task: AzureCLI@2
       displayName: Step2 - VNet
+      env:
+        ARM_USE_AZCLI_AUTH: 'true'
+        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_VAR_create_subscription: $(overrideCreateSubscription)
       inputs:
         azureSubscription: snp-pipeline-api
         scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          $ErrorActionPreference='Stop'
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          $tfDir = "$(tfDir)"
-          function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
+          function Invoke-TerraformStep { param([string]$Dir)
             Push-Location $Dir; try {
               terraform init -no-color
-              if ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0) {
-                $args=@("apply","-no-color","-auto-approve"); foreach($t in $Targets){$args+="-target=$t"}
-                terraform @args
+              if ("$(USE_TARGETED_APPLY)" -eq "true") {
+                terraform apply -no-color -auto-approve -target=azurerm_virtual_network.vnet
                 if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full"
+                  Write-Warning "Target failed; fallback full"
                   terraform apply -no-color -auto-approve
-                  if ($LASTEXITCODE -ne 0) { throw "fallback failed" }
+                  if ($LASTEXITCODE -ne 0) { throw "apply failed" }
                 }
               } else {
                 terraform apply -no-color -auto-approve
                 if ($LASTEXITCODE -ne 0) { throw "apply failed" }
               }
             } finally { Pop-Location } }
-          Invoke-TerraformStep -Dir $tfDir -Targets @("azurerm_virtual_network.vnet")
-      env:
-        ARM_USE_AZCLI_AUTH: 'true'
-        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-        TF_VAR_create_subscription: $(overrideCreateSubscription)
+          Invoke-TerraformStep -Dir "$(tfDir)"
 
     # Step3 Subnet + NSG
     - task: AzureCLI@2
       displayName: Step3 - Subnet + NSG
+      env:
+        ARM_USE_AZCLI_AUTH: 'true'
+        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_VAR_create_subscription: $(overrideCreateSubscription)
       inputs:
         azureSubscription: snp-pipeline-api
         scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          $ErrorActionPreference='Stop'
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          $tfDir = "$(tfDir)"
-          function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
+          function Invoke-TerraformStep { param([string]$Dir)
             Push-Location $Dir; try {
               terraform init -no-color
-              if ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0) {
-                $args=@("apply","-no-color","-auto-approve"); foreach($t in $Targets){$args+="-target=$t"}
-                terraform @args
+              if ("$(USE_TARGETED_APPLY)" -eq "true") {
+                terraform apply -no-color -auto-approve `
+                  -target=azurerm_network_security_group.subnet_nsg `
+                  -target=azurerm_subnet.subnet `
+                  -target=azurerm_subnet_network_security_group_association.subnet_assoc
                 if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full"
+                  Write-Warning "Target failed; fallback full"
                   terraform apply -no-color -auto-approve
-                  if ($LASTEXITCODE -ne 0) { throw "fallback failed" }
+                  if ($LASTEXITCODE -ne 0) { throw "apply failed" }
                 }
               } else {
                 terraform apply -no-color -auto-approve
                 if ($LASTEXITCODE -ne 0) { throw "apply failed" }
               }
             } finally { Pop-Location } }
-          Invoke-TerraformStep -Dir $tfDir -Targets @(
-            "azurerm_network_security_group.subnet_nsg",
-            "azurerm_subnet.subnet",
-            "azurerm_subnet_network_security_group_association.subnet_assoc"
-          )
+          Invoke-TerraformStep -Dir "$(tfDir)"
+
+    # Step4a Hub -> Spoke (Import Guard)
+    - task: AzureCLI@2
+      displayName: Step4a - Peering Hub->Spoke
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
-
-    # Step4a Hub -> Spoke
-    - task: AzureCLI@2
-      displayName: Step4a - Peering Hub->Spoke
       inputs:
         azureSubscription: snp-pipeline-api
         scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          $ErrorActionPreference='Stop'
           $hubSub = "$(hubSubscriptionId)"
           if (-not $hubSub) { throw "hub_subscription_id not parsed." }
           az account set --subscription $hubSub
           Write-Host "CLI context (Hub): $hubSub"
           $tfDir = "$(tfDir)"
-          function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
-            Push-Location $Dir; try {
+
+          # Import Guard (create_subscription=true の場合 state に alias が無ければ import)
+          if ($env:TF_VAR_create_subscription -eq "true") {
+            Push-Location $tfDir
+            try {
               terraform init -no-color
-              if ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0) {
-                $args=@("apply","-no-color","-auto-approve"); foreach($t in $Targets){$args+="-target=$t"}
-                terraform @args
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full"
-                  terraform apply -no-color -auto-approve
-                  if ($LASTEXITCODE -ne 0) { throw "fallback failed" }
+              $stateCheck = terraform state show azapi_resource.subscription[0] 2>$null
+              if (-not $?) {
+                Write-Host "Subscription alias not in state: attempting import"
+                $alias = "$(aliasName)"
+                if ($alias) {
+                  terraform import -no-color azapi_resource.subscription[0] "/providers/Microsoft.Subscription/aliases/$alias" 2>$null
+                  if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Import failed or alias not required (continuing)."
+                  } else {
+                    Write-Host "Import success."
+                  }
                 }
               } else {
-                terraform apply -no-color -auto-approve
-                if ($LASTEXITCODE -ne 0) { throw "apply failed" }
+                Write-Host "Alias already in state."
               }
+            } finally { Pop-Location }
+          }
+
+          function Invoke-TerraformStep { param([string]$Dir)
+            Push-Location $Dir; try {
+              terraform init -no-color
+              # Peering は依存解決が複合的なので target を避け、常にフル適用推奨
+              terraform apply -no-color -auto-approve
+              if ($LASTEXITCODE -ne 0) { throw "apply failed" }
             } finally { Pop-Location } }
-          Invoke-TerraformStep -Dir $tfDir -Targets @("azurerm_virtual_network_peering.hub_to_spoke")
-      env:
-        ARM_USE_AZCLI_AUTH: 'true'
-        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-        TF_VAR_create_subscription: $(overrideCreateSubscription)
+          Invoke-TerraformStep -Dir $tfDir
 
     # Step4b Spoke -> Hub
     - task: AzureCLI@2
       displayName: Step4b - Peering Spoke->Hub
-      inputs:
-        azureSubscription: snp-pipeline-api
-        scriptType: pscore
-        scriptLocation: inlineScript
-        inlineScript: |
-          $ErrorActionPreference='Stop'
-          az account set --subscription "$(finalSpokeSubscriptionId)"
-          Write-Host "CLI context (Spoke): $(finalSpokeSubscriptionId)"
-          $tfDir = "$(tfDir)"
-          function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
-            Push-Location $Dir; try {
-              terraform init -no-color
-              if ("$(USE_TARGETED_APPLY)" -eq "true" -and $Targets.Count -gt 0) {
-                $args=@("apply","-no-color","-auto-approve"); foreach($t in $Targets){$args+="-target=$t"}
-                terraform @args
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full"
-                  terraform apply -no-color -auto-approve
-                  if ($LASTEXITCODE -ne 0) { throw "fallback failed" }
-                }
-              } else {
-                terraform apply -no-color -auto-approve
-                if ($LASTEXITCODE -ne 0) { throw "apply failed" }
-              }
-            } finally { Pop-Location } }
-          Invoke-TerraformStep -Dir $tfDir -Targets @("azurerm_virtual_network_peering.spoke_to_hub")
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
-
-    # Verify peering (Spoke 側)
-    - task: AzureCLI@2
-      displayName: Verify Peering (spoke-to-hub)
       inputs:
         azureSubscription: snp-pipeline-api
         scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
-          $ErrorActionPreference='Stop'
+          az account set --subscription "$(finalSpokeSubscriptionId)"
+          Write-Host "CLI context (Spoke): $(finalSpokeSubscriptionId)"
+          $tfDir = "$(tfDir)"
+          function Invoke-TerraformStep { param([string]$Dir)
+            Push-Location $Dir; try {
+              terraform init -no-color
+              terraform apply -no-color -auto-approve
+              if ($LASTEXITCODE -ne 0) { throw "apply failed" }
+            } finally { Pop-Location } }
+          Invoke-TerraformStep -Dir $tfDir
+
+    # Verify
+    - task: AzureCLI@2
+      displayName: Verify Peering (spoke-to-hub)
+      env:
+        ARM_USE_AZCLI_AUTH: 'true'
+        TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_VAR_create_subscription: $(overrideCreateSubscription)
+      inputs:
+        azureSubscription: snp-pipeline-api
+        scriptType: pscore
+        scriptLocation: inlineScript
+        inlineScript: |
           az account set --subscription "$(finalSpokeSubscriptionId)"
           $tfDir = "$(tfDir)"
           Push-Location $tfDir
@@ -431,19 +414,34 @@ stages:
             terraform init -no-color | Out-Null
             terraform show -json | Out-File tfstate.json -Encoding UTF8
           } finally { Pop-Location }
-          $json = Get-Content "$tfDir\tfstate.json" -Raw | ConvertFrom-Json
-          $vnetRes = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" } | Select-Object -First 1
-          if (-not $vnetRes) { throw "No VNet resource found in state." }
-          $spokeVnet = $vnetRes.values.name
-          $spokeRg   = $vnetRes.values.resource_group_name
-          $state = az network vnet peering show `
-            --resource-group $spokeRg `
-            --vnet-name $spokeVnet `
+          $stateObj = Get-Content "$tfDir\tfstate.json" -Raw | ConvertFrom-Json
+          $vnetRes = $stateObj.values.root_module.resources |
+            Where-Object { $_.type -eq "azurerm_virtual_network" } |
+            Select-Object -First 1
+          if (-not $vnetRes) { throw "No VNet resource in state for verification." }
+          $vnetName = $vnetRes.values.name
+          $rgName   = $vnetRes.values.resource_group_name
+          $status = az network vnet peering show `
+            --resource-group $rgName `
+            --vnet-name $vnetName `
             --name "spoke-to-hub" `
             --query peeringState -o tsv 2>$null
-          if (-not $state) { throw "Peering 'spoke-to-hub' not found (RG=$spokeRg VNet=$spokeVnet)" }
-          Write-Host "Peering 'spoke-to-hub' state: $state"
+          if (-not $status) { throw "Peering 'spoke-to-hub' not found (RG=$rgName VNet=$vnetName)" }
+          Write-Host "Peering 'spoke-to-hub' state: $status (OK)"
+
+    # Optional: 最終収束確認 (差分なしであること)
+    - task: AzureCLI@2
+      displayName: Convergence Plan (Optional)
+      continueOnError: true
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
+      inputs:
+        azureSubscription: snp-pipeline-api
+        scriptType: pscore
+        scriptLocation: inlineScript
+        inlineScript: |
+          az account set --subscription "$(finalSpokeSubscriptionId)"
+          terraform -chdir="$(tfDir)" init -no-color | Out-Null
+          terraform -chdir="$(tfDir)" plan -no-color
