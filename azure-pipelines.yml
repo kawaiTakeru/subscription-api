@@ -1,25 +1,33 @@
 # subscription-api / azure-pipelines.yml  (Single-stage, sequential steps)
 # 要件:
 #  1) 既存サブスクリプションがあればそのまま利用して RG -> VNet -> Subnet -> Peering
-#  2) 無ければ (tfvars で create_subscription=true かつ spoke_subscription_id 空)
-#     → Alias(=Subscription) 作成後に 1) の続き
-# 改善点:
-#  - 既存 Alias がある場合は Terraform で azapi_resource.subscription を管理しない
-#    (import もしない) ⇒ 後続ステップで "Resource already exists" を回避
-#  - 新規作成した場合のみ create_subscription=true を後続に伝播し、state で管理継続
-#  - 後続ステップへは finalSpokeSubscriptionId を TF_VAR_spoke_subscription_id で注入
-#  - 各ステップで TF_VAR_create_subscription を上書き (overrideCreateSubscription)
-#  - Peering Hub->Spoke は Hub サブスクリプションへ CLI コンテキストを切替
+#  2) 無ければ (create_subscription=true かつ spoke_subscription_id 空)
+#     → Alias(Subscription) を作成してから続行
+# ポイント (修正反映):
+#  - 既存 Alias の場合は Terraform state に無いので "Resource already exists" を避けるため
+#    後続では create_subscription=false に強制 (count=0 で subscription リソースを評価させない)
+#  - 新規作成した場合は create_subscription=true を維持し、後続で state に残したまま (再作成されない)
+#  - decideSub で overrideCreateSubscription を確定し、全 Step に TF_VAR_create_subscription を注入
+#  - Hub→Spoke ピアリングは Hub サブスクリプション CLI コンテキスト、Spoke→Hub は Spoke
+#  - USE_TARGETED_APPLY=true の時だけ target 付き; 失敗時はフル apply フォールバック
+#  - デバッグ出力を追加 (変数確認用)
+#
+# terraform/main.tf 側の前提:
+#   resource "azapi_resource" "subscription" {
+#     count = var.create_subscription ? 1 : 0
+#     ...
+#   }
+#   (未修正なら main.tf にこの count 条件を追加してください)
 #
 # 使い方 (terraform/terraform.tfvars):
-#  パターンA (既存流用):
+#  A) 既存:
 #     create_subscription = false
 #     spoke_subscription_id = "<既存 SubscriptionId>"
-#  パターンB (新規作成):
+#  B) 新規:
 #     create_subscription = true
-#     spoke_subscription_id は空 (未記載または "")
+#     spoke_subscription_id = "" (または未記載)
 #
-# オプション: USE_TARGETED_APPLY=false にすれば常にフル apply (収束確認用)
+# 任意: 最終収束確認のため USE_TARGETED_APPLY を false に設定し一度フル apply 実行推奨
 
 trigger: none
 pr: none
@@ -87,13 +95,13 @@ stages:
             $val.Trim().Trim('"')
           }
 
+            # 変数取得
           $createRaw = Get-TfVar $tfvars "create_subscription"
           $create = if ($createRaw -match '^(?i:true|1)$') { 'true' } else { 'false' }
           $aliasName = Get-TfVar $tfvars "subscription_alias_name"
           $spokeId   = Get-TfVar $tfvars "spoke_subscription_id"
           $hubSub    = Get-TfVar $tfvars "hub_subscription_id"
 
-            # Dump
           Write-Host "Parsed: create_subscription=$create alias=$aliasName spoke_subscription_id=$spokeId hub_subscription_id=$hubSub"
 
           Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$create"
@@ -101,7 +109,7 @@ stages:
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeId"
           Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSub"
 
-    # Step0: 新規作成が必要な場合のみ (既存の場合は alias 解析して ID を取得するだけ)
+    # Step0: 新規作成が必要 (create=true & spoke_subscription_id 空) のときのみ
     - task: AzureCLI@2
       name: step0
       displayName: Step0 - Ensure Subscription (alias create or lookup)
@@ -113,7 +121,7 @@ stages:
         inlineScript: |
           $ErrorActionPreference='Stop'
           $alias = "$(aliasName)"
-          if (-not $alias) { throw "subscription_alias_name missing in tfvars." }
+          if (-not $alias) { throw "subscription_alias_name missing." }
           $tfDir = "$(tfDir)"
           $targetAddress = "azapi_resource.subscription[0]"
           $aliasRid = "/providers/Microsoft.Subscription/aliases/$alias"
@@ -134,16 +142,15 @@ stages:
 
           $existing = GetSubId $alias
           if ($existing) {
-            Write-Host "Alias exists (pre-existing). alias=$alias subId=$existing"
-            # 既存の場合は import しない (create_subscription を後続で false に変更して扱わない)
+            Write-Host "Alias already exists (skip creation). alias=$alias subId=$existing"
+            # 既存 → import はせず後続で create_subscription=false にする
             Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existing"
             Write-Host "##vso[task.setvariable variable=aliasPreExisting;isOutput=true]true"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew;isOutput=true]false"
             exit 0
           }
 
-          # 新規作成
-          Write-Host "Creating subscription alias: $alias"
+          Write-Host "Creating alias: $alias"
           Push-Location $tfDir
           try {
             terraform init -no-color
@@ -152,21 +159,21 @@ stages:
             if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias) failed" }
           } finally { Pop-Location }
 
-          # ポーリング (最大 6 分)
-            $subId = ""
-          for ($i=0; $i -lt 36 -and -not $subId; $i++) {
+          # ポーリング
+          $subId=""
+          for($i=0;$i -lt 36 -and -not $subId;$i++){
             $subId = GetSubId $alias
-            if ($subId) { break }
+            if($subId){break}
             Start-Sleep -Seconds 10
           }
-          if (-not $subId) { throw "SubscriptionId not resolved after 360s (alias=$alias)" }
+          if(-not $subId){ throw "SubscriptionId not resolved within 360s" }
 
           Write-Host "Created subscriptionId=$subId"
           Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
           Write-Host "##vso[task.setvariable variable=aliasPreExisting;isOutput=true]false"
           Write-Host "##vso[task.setvariable variable=aliasCreatedNew;isOutput=true]true"
 
-    # Step0 をスキップした場合 (create_subscription=false か spoke_subscription_id 指定) でも ID 確定ロジックを共通化
+    # ID / フラグを正規化
     - task: PowerShell@2
       name: decideSub
       displayName: Decide / Normalize Subscription Flags
@@ -178,44 +185,38 @@ stages:
           $fromTfvars = "$(spokeSubIdFromTfvars)"
           $final = if ($fromStep0) { $fromStep0 } else { $fromTfvars }
           if (-not $final) {
-            if ("$(createSubscriptionFlag)" -eq "true") {
-              throw "Subscription ID not resolved (Step0 probably failed)."
-            } else {
-              throw "spoke_subscription_id must be set in tfvars when create_subscription=false."
-            }
+            if ("$(createSubscriptionFlag)" -eq "true") { throw "Subscription ID not resolved (Step0 failure?)" }
+            throw "spoke_subscription_id required when create_subscription=false"
           }
 
-          # aliasPreExisting が空 (Step0 スキップ時) の判定
           $aliasPreExisting = "$(step0.aliasPreExisting)"
-          if (-not $aliasPreExisting) {
-            # Step0 スキップ (= 既存 ID 指定 or create_subscription=false)
-            $aliasPreExisting = "true"
-          }
-
-          # overrideCreateSubscription の決定
-          # 既存 alias (import していない) → false
-          # 新規作成 (今回 alias 作った)   → true (引き続き state 管理させる)
-          $aliasCreatedNew = "$(step0.aliasCreatedNew)"
+          if (-not $aliasPreExisting) { $aliasPreExisting = "true" }  # Step0 未実行時=既存
+          $aliasCreatedNew  = "$(step0.aliasCreatedNew)"
           if (-not $aliasCreatedNew) { $aliasCreatedNew = "false" }
 
+          # ロジック: 既存 alias (state 無) → create_subscription=false
+          #          新規 alias (state 有) → true (state で管理)
           if ($aliasPreExisting -eq "true") {
             $override = "false"
           } else {
-            # 新規作成だが create_subscriptionFlag が true の場合のみ true
             $override = if ("$(createSubscriptionFlag)" -eq "true" -and $aliasCreatedNew -eq "true") { "true" } else { "false" }
           }
 
-          Write-Host "Resolved Spoke Subscription ID: $final (aliasPreExisting=$aliasPreExisting aliasCreatedNew=$aliasCreatedNew overrideCreateSubscription=$override)"
+          Write-Host "Resolved Spoke Subscription ID: $final"
+          Write-Host "aliasPreExisting=$aliasPreExisting aliasCreatedNew=$aliasCreatedNew => overrideCreateSubscription=$override"
           Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$final"
           Write-Host "##vso[task.setvariable variable=overrideCreateSubscription]$override"
 
-    # 共通: Terraform Helper (再利用)
+    - powershell: |
+        Write-Host "DEBUG: finalSpokeSubscriptionId=$(finalSpokeSubscriptionId)"
+        Write-Host "DEBUG: overrideCreateSubscription=$(overrideCreateSubscription)"
+        if (-not "$(finalSpokeSubscriptionId)") { throw "finalSpokeSubscriptionId empty" }
+      displayName: Debug print normalized vars
+
+    # Helper
     - powershell: |
         function Invoke-TerraformStep {
-          param(
-            [string]$Dir,
-            [string[]]$Targets
-          )
+          param([string]$Dir,[string[]]$Targets)
           Push-Location $Dir
           try {
             terraform init -no-color
@@ -236,11 +237,9 @@ stages:
               terraform apply -no-color -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "terraform apply failed" }
             }
-          } finally {
-            Pop-Location
-          }
+          } finally { Pop-Location }
         }
-        Write-Host "Helper function loaded."
+        Write-Host "Helper loaded."
       displayName: Load helper function
 
     # Step1 RG
@@ -252,8 +251,7 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $subId = "$(finalSpokeSubscriptionId)"
-          az account set --subscription $subId
+          az account set --subscription "$(finalSpokeSubscriptionId)"
           $tfDir = "$(tfDir)"
           function Invoke-TerraformStep { param([string]$Dir,[string[]]$Targets)
             Push-Location $Dir; try {
@@ -347,7 +345,7 @@ stages:
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
 
-    # Step4a Hub -> Spoke Peering (ハブ側 vNet で作成)
+    # Step4a Hub -> Spoke
     - task: AzureCLI@2
       displayName: Step4a - Peering Hub->Spoke
       inputs:
@@ -383,7 +381,7 @@ stages:
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
 
-    # Step4b Spoke -> Hub Peering (スポーク側)
+    # Step4b Spoke -> Hub
     - task: AzureCLI@2
       displayName: Step4b - Peering Spoke->Hub
       inputs:
@@ -417,7 +415,7 @@ stages:
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
         TF_VAR_create_subscription: $(overrideCreateSubscription)
 
-    # Verify Peering
+    # Verify peering (Spoke 側)
     - task: AzureCLI@2
       displayName: Verify Peering (spoke-to-hub)
       inputs:
@@ -434,9 +432,7 @@ stages:
             terraform show -json | Out-File tfstate.json -Encoding UTF8
           } finally { Pop-Location }
           $json = Get-Content "$tfDir\tfstate.json" -Raw | ConvertFrom-Json
-          $vnetRes = $json.values.root_module.resources |
-            Where-Object { $_.type -eq "azurerm_virtual_network" } |
-            Select-Object -First 1
+          $vnetRes = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" } | Select-Object -First 1
           if (-not $vnetRes) { throw "No VNet resource found in state." }
           $spokeVnet = $vnetRes.values.name
           $spokeRg   = $vnetRes.values.resource_group_name
