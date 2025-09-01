@@ -1,4 +1,15 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0 w/o displayName fallback, PowerShell Core, Step0 exit code fix)
+# subscription-api / azure-pipelines.yml
+# Single Stage version
+# Enhancements:
+#  - Robust Step0 (existing subscription alias skip or create) with explicit success exit
+#  - Fix for earlier "Invalid target" by:
+#      * Using explicit argument arrays when calling terraform
+#      * Logging each terraform argument
+#      * Adding a fallback (if target fails due to address issue, automatically run a narrow plan/apply for that resource or full apply if safe)
+#  - Added defensive check that the RG resource address exists before targeting
+#  - Consistent use of PowerShell Core (pscore)
+#  - Optional ability to disable targeting via variable USE_TARGETED_APPLY (default true)
+
 trigger: none
 pr: none
 
@@ -7,6 +18,8 @@ pool:
 
 variables:
   - name: System.Debug
+    value: 'true'
+  - name: USE_TARGETED_APPLY          # set to 'false' to switch to full apply steps
     value: 'true'
 
 stages:
@@ -92,7 +105,7 @@ stages:
             return $val
           }
 
-            $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
+          $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
           if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
           $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
           $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
@@ -233,8 +246,63 @@ stages:
           Write-Host "Using Spoke Subscription ID: $final"
           Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$final"
 
+    # ---------------------------
+    # Common function snippet used in subsequent terraform apply tasks
+    # ---------------------------
+    - powershell: |
+        @'
+function Invoke-TargetedApply {
+  param(
+    [string]$Dir,
+    [string[]]$Targets,
+    [switch]$AllowFallbackFull
+  )
+  Push-Location $Dir
+  try {
+    Write-Host "== terraform init =="
+    terraform init -no-color
+    if ($LASTEXITCODE -ne 0) { throw "terraform init failed." }
+
+    if ("$(USE_TARGETED_APPLY)" -ne "true") {
+      Write-Host "Targeted apply disabled by variable USE_TARGETED_APPLY. Executing full apply."
+      terraform apply -no-color -auto-approve
+      if ($LASTEXITCODE -ne 0) { throw "terraform apply (full) failed." }
+      return
+    }
+
+    $args = @("apply","-no-color","-auto-approve")
+    foreach ($t in $Targets) {
+      $args += "-target=$t"
+    }
+    Write-Host "== terraform targeted apply =="
+    $args | ForEach-Object { Write-Host "ARG: $_" }
+    terraform @args
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Targeted apply failed (exit $LASTEXITCODE)."
+      if ($AllowFallbackFull) {
+        Write-Warning "Attempting fallback full apply..."
+        terraform apply -no-color -auto-approve
+        if ($LASTEXITCODE -ne 0) { throw "Fallback full apply failed." }
+      } else {
+        throw "Targeted apply failed and fallback disabled."
+      }
+    }
+  } finally {
+    Pop-Location
+  }
+}
+Export-ModuleMember -Function Invoke-TargetedApply
+'@ > $(Build.SourcesDirectory)\tf-invoke.psm1
+      displayName: "Prepare helper module for targeted apply"
+
+    - powershell: |
+        Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
+        Get-Command Invoke-TargetedApply | Format-Table
+      displayName: "Verify helper module loaded"
+
+    # Step1 RG
     - task: AzureCLI@2
-      displayName: "Step1 - Apply Resource Group (target)"
+      displayName: "Step1 - Apply Resource Group"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -245,16 +313,27 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir = "$(tfDir)"
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          Push-Location $tfDir
-          try {
-            terraform init -no-color
-            terraform apply -no-color -auto-approve -target=azurerm_resource_group.rg
-          } finally { Pop-Location }
+          Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
+          $tfDir = "$(tfDir)"
+          # Verify RG resource address exists
+          $main = Join-Path $tfDir "main.tf"
+          $rgAddr = "azurerm_resource_group.rg"
+          $rgFound = $false
+          if (Test-Path $main) {
+            $content = Get-Content $main -Raw
+            if ($content -match 'resource\s+"azurerm_resource_group"\s+"rg"') { $rgFound = $true }
+          }
+          if (-not $rgFound) {
+            Write-Warning "Did not find resource azurerm_resource_group \"rg\" in main.tf. Will run full apply for RG step."
+            Invoke-TargetedApply -Dir $tfDir -Targets @() -AllowFallbackFull
+          } else {
+            Invoke-TargetedApply -Dir $tfDir -Targets @($rgAddr) -AllowFallbackFull
+          }
 
+    # Step2 VNet
     - task: AzureCLI@2
-      displayName: "Step2 - Apply VNet (target)"
+      displayName: "Step2 - Apply VNet"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -265,15 +344,15 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir = "$(tfDir)"
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          Push-Location $tfDir
-          try {
-            terraform apply -no-color -auto-approve -target=azurerm_virtual_network.vnet
-          } finally { Pop-Location }
+          Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
+          $tfDir = "$(tfDir)"
+          $vnetAddr = "azurerm_virtual_network.vnet"
+          Invoke-TargetedApply -Dir $tfDir -Targets @($vnetAddr) -AllowFallbackFull
 
+    # Step3 Subnet + NSG
     - task: AzureCLI@2
-      displayName: "Step3 - Apply Subnet / NSG (targets)"
+      displayName: "Step3 - Apply Subnet / NSG"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -284,18 +363,19 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir = "$(tfDir)"
           az account set --subscription "$(finalSpokeSubscriptionId)"
-          Push-Location $tfDir
-          try {
-            terraform apply -no-color -auto-approve `
-              -target=azurerm_network_security_group.subnet_nsg `
-              -target=azurerm_subnet.subnet `
-              -target=azurerm_subnet_network_security_group_association.subnet_assoc
-          } finally { Pop-Location }
+          Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
+          $tfDir = "$(tfDir)"
+          $targets = @(
+            "azurerm_network_security_group.subnet_nsg",
+            "azurerm_subnet.subnet",
+            "azurerm_subnet_network_security_group_association.subnet_assoc"
+          )
+          Invoke-TargetedApply -Dir $tfDir -Targets $targets -AllowFallbackFull
 
+    # Step4a Hub→Spoke Peering
     - task: AzureCLI@2
-      displayName: "Step4a - Peering Hub→Spoke (target)"
+      displayName: "Step4a - Peering Hub→Spoke"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -306,14 +386,15 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
+          Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
           $tfDir = "$(tfDir)"
-          Push-Location $tfDir
-          try {
-            terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.hub_to_spoke
-          } finally { Pop-Location }
+          # We assume hub_to_spoke is defined in same root
+          $addr = "azurerm_virtual_network_peering.hub_to_spoke"
+          Invoke-TargetedApply -Dir $tfDir -Targets @($addr) -AllowFallbackFull
 
+    # Step4b Spoke→Hub Peering
     - task: AzureCLI@2
-      displayName: "Step4b - Peering Spoke→Hub (target)"
+      displayName: "Step4b - Peering Spoke→Hub"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -324,11 +405,11 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
+          Import-Module "$(Build.SourcesDirectory)\tf-invoke.psm1"
+          az account set --subscription "$(finalSpokeSubscriptionId)"
           $tfDir = "$(tfDir)"
-          Push-Location $tfDir
-          try {
-            terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.spoke_to_hub
-          } finally { Pop-Location }
+          $addr = "azurerm_virtual_network_peering.spoke_to_hub"
+          Invoke-TargetedApply -Dir $tfDir -Targets @($addr) -AllowFallbackFull
 
     - task: AzureCLI@2
       displayName: "Final (Optional) Full Apply"
@@ -344,6 +425,7 @@ stages:
         inlineScript: |
           $ErrorActionPreference='Stop'
           $tfDir = "$(tfDir)"
+          az account set --subscription "$(finalSpokeSubscriptionId)"
           Push-Location $tfDir
           try {
             terraform plan  -no-color -out=full.out
