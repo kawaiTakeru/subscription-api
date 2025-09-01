@@ -1,17 +1,4 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Step targets / FIXED)
-# 修正内容:
-#   * Step0 の -target を count 付きリソースに合わせて [0] を付与
-#       - resource "azapi_resource" "subscription" { count = ... } のため
-#         Terraform 内部アドレスは azapi_resource.subscription[0]
-#   * data.azapi_resource.subscription_get は単一 (count なし) なのでそのまま
-#   * それ以外の構造・手順は依頼いただいた元ファイルを維持
-#   * create_subscription=false で spoke_subscription_id を tfvars に記載した場合は
-#       Step0 は condition によりスキップし decideSub が tfvars の値を採用
-#
-# 前提:
-#   terraform/ 配下に main.tf / variables.tf / terraform.tfvars
-#   (terraform.tfvars がリポジトリに無い場合は例示ステップで example からコピーするか、
-#    変数グループ・Secure Files 等で配置)
+# subscription-api / azure-pipelines.yml (Single Stage + Step targets, Step0 minimal fix)
 trigger: none
 pr: none
 
@@ -42,7 +29,7 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # 任意: terraform.tfvars.example から terraform.tfvars を生成
+    # 任意: terraform.tfvars.example から terraform.tfvars を生成（秘匿値を含めない前提）
     - powershell: |
         $tfDir = "$(Build.SourcesDirectory)\terraform"
         $example = Join-Path $tfDir "terraform.tfvars.example"
@@ -83,7 +70,7 @@ stages:
             Write-Host "(Role assignment query failed: $($_.Exception.Message))"
           }
 
-    # tfvars パース
+    # tfvars パース (tfDir を terraform/ に統一)
     - task: PowerShell@2
       name: prep
       displayName: "Prepare Variables (parse tfvars)"
@@ -96,7 +83,7 @@ stages:
           $tfDir  = "$(Build.SourcesDirectory)\terraform"
           $tfvars = Join-Path $tfDir "terraform.tfvars"
           if (-not (Test-Path $tfDir))  { throw "Terraform directory not found: $tfDir" }
-          if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
+            if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
 
           function Get-TfvarsValue([string]$Path, [string]$Key) {
             $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
@@ -119,7 +106,7 @@ stages:
           Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
-    # Step0: Subscription Alias 作成 (create_subscription=true かつ spoke_subscription_id 空)
+    # Step0: Subscription Alias 作成 (dataソースは target しない)
     - task: AzureCLI@2
       name: step0
       displayName: "Step0 - Create Subscription (targeted plan+apply)"
@@ -152,25 +139,19 @@ stages:
               return
             }
 
-            # count 付きリソースは [0] を付与
-            $targets = @(
-              "-target=azapi_resource.subscription[0]"
-              "-target=data.azapi_resource.subscription_get"
-            )
-
-            Write-Host "Planning (targeted)..."
-            terraform plan -no-color -input=false @targets -out=stage0.plan
+            Write-Host "Planning (targeted resource only)..."
+            terraform plan -no-color -input=false -out=stage0.plan -target=azapi_resource.subscription[0]
             if ($LASTEXITCODE -ne 0) { throw "terraform plan (targeted) failed." }
 
             Write-Host "Applying (plan file)..."
             terraform apply -no-color -auto-approve stage0.plan
             if ($LASTEXITCODE -ne 0) { throw "terraform apply (targeted plan) failed." }
 
-            # Output 取得 (state 反映待ちポーリング含む)
+            # Output 試行 (data ソースは target していないため空の場合あり)
             $subId = ""
             try { $subId = terraform output -raw subscription_id 2>$null } catch {}
             if (-not $subId) {
-              Write-Host "subscription_id not yet in state. Poll Azure for alias..."
+              Write-Host "subscription_id not in output yet. Polling alias via CLI..."
               for ($i=0; $i -lt 30 -and -not $subId; $i++) {
                 Start-Sleep -Seconds 10
                 try {
@@ -186,7 +167,7 @@ stages:
             Pop-Location
           }
 
-    # Step0 結果 + 既存利用の判断
+    # Step0 結果 + 既存利用時の判断
     - task: PowerShell@2
       name: decideSub
       displayName: "Decide Spoke Subscription ID"
@@ -309,7 +290,7 @@ stages:
             terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.spoke_to_hub
           } finally { Pop-Location }
 
-    # 任意: フル適用 (drift 解消)
+    # 任意: フル適用 (drift 調整)
     - task: AzureCLI@2
       displayName: "Final (Optional) Full Apply"
       enabled: false
@@ -347,17 +328,14 @@ stages:
             terraform show -json | Out-File tfstate.json -Encoding utf8
             $json = Get-Content tfstate.json -Raw | ConvertFrom-Json
           } finally { Pop-Location }
-
           $vnetRes = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" } | Select-Object -First 1
           if (-not $vnetRes) { throw "VNet resource not found in state." }
           $spokeVnet = $vnetRes.values.name
           $spokeRg   = $vnetRes.values.resource_group_name
-
           $state = az network vnet peering show `
               --resource-group $spokeRg `
               --vnet-name $spokeVnet `
               --name "spoke-to-hub" `
               --query peeringState -o tsv 2>$null
-
           if (-not $state) { throw "spoke-to-hub peering not found (RG=$spokeRg VNet=$spokeVnet)" }
           Write-Host "Peering 'spoke-to-hub' state: $state"
