@@ -15,3 +15,36 @@ steps:
 
       echo "=== Graph token ==="
       az account get-access-token --resource https://graph.microsoft.com
+
+- task: AzureCLI@2
+  displayName: "Test ARM + Graph (token & simple API)"
+  inputs:
+    azureSubscription: 'mi-pipeline-api'   # 作成した Service connection 名
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -e
+
+      echo "=== Who am I (should be servicePrincipal) ==="
+      az account show --query "{tenantId:tenantId, name:name, user:user}" -o table
+
+      echo ""
+      echo "=== ARM token (head only) ==="
+      az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | cut -c1-60
+
+      echo ""
+      echo "=== Call ARM API: list subscriptions (first 2) ==="
+      az rest --method get \
+        --url "https://management.azure.com/subscriptions?api-version=2020-01-01" \
+        --query "value[].{id:subscriptionId, displayName:displayName}" -o table | head -n 5
+
+      echo ""
+      echo "=== Graph token (head only) ==="
+      az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv | cut -c1-60
+
+      echo ""
+      echo "=== Call Graph API: organization ==="
+      az rest --resource https://graph.microsoft.com \
+        --method get \
+        --url "https://graph.microsoft.com/v1.0/organization" \
+        --query "value[0].{id:id, displayName:displayName, tenantId:tenantId}" -o table
