@@ -27,7 +27,7 @@ variable "subscription_workload" {
   default     = "Production"
 }
 variable "create_subscription" {
-  description = "サブスクリプション(エイリアス)を新規作成するか"
+  description = "サブスクリプション(エイリアス)を新規作成するか (spoke_subscription_id 空の場合のみ有効)"
   type        = bool
   default     = true
 }
@@ -37,15 +37,14 @@ variable "enable_billing_check" {
   default     = false
 }
 
-# Spoke サブスクリプション (新規作成後に注入 or 既存)
 variable "spoke_subscription_id" {
-  description = "Spoke Subscription ID (create_subscription=false なら必須。true の場合 Step0 後に再 apply 時に指定)"
+  description = "既存 Spoke Subscription ID (既存利用時)。新規作成時は Step0 後に pipeline から注入"
   type        = string
   default     = ""
 }
 
 variable "spoke_tenant_id" {
-  description = "Spoke Tenant ID (必要に応じて設定)"
+  description = "Spoke Tenant ID (必要に応じて)"
   type        = string
   default     = ""
 }
