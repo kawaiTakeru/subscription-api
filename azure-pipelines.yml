@@ -1,4 +1,4 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0: existing alias skip or create)
+# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0 w/o displayName fallback, PowerShell Core)
 trigger: none
 pr: none
 
@@ -44,7 +44,7 @@ stages:
       displayName: "WHOAMI (service connection identity)"
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -106,7 +106,6 @@ stages:
           Write-Host "##vso[task.setvariable variable=displayName]$displayName"
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
-    # Step0: 既存 alias チェック → あればスキップ、無ければ作成
     - task: AzureCLI@2
       name: step0
       displayName: "Step0 - Ensure Subscription (Skip if exists)"
@@ -115,109 +114,90 @@ stages:
         ARM_USE_AZCLI_AUTH: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir       = "$(tfDir)"
-          $alias       = "$(aliasName)"
-          $displayName = "$(displayName)"
-          if (-not $alias) { throw "subscription_alias_name not found in tfvars (empty)" }
+          $tfDir  = "$(tfDir)"
+          $alias  = "$(aliasName)"
+          if (-not $alias) { throw "subscription_alias_name not found (empty)" }
 
           $targetAddress = "azapi_resource.subscription[0]"
           $aliasRid = "/providers/Microsoft.Subscription/aliases/$alias"
 
-          function Get-SubIdFromAny([string]$AliasName,[string]$DisplayName) {
+          function Get-SubIdFromAlias([string]$AliasName) {
             if (-not $AliasName) { return "" }
-            # 1) alias show
             try {
               $id = az account alias show --name $AliasName --query "properties.subscriptionId" -o tsv 2>$null
               if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
             } catch {}
-            # 2) REST
-            try {
-              $url = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$AliasName?api-version=2021-10-01"
-              $id = az rest --method get --url $url --query "properties.subscriptionId" -o tsv 2>$null
-              if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-            } catch {}
-            # 3) generic resource
             try {
               $id = az resource show --ids "/providers/Microsoft.Subscription/aliases/$AliasName" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null
               if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
             } catch {}
-            # 4) displayName fallback (非推奨・重複注意)
-            if ($DisplayName) {
-              try {
-                $id = az account subscription list --refresh true --query "[?name=='$DisplayName'].id | [0]" -o tsv 2>$null
-                if ($LASTEXITCODE -eq 0 -and $id) { return $id.Trim() }
-              } catch {}
-            }
             return ""
           }
 
-          function Import-AliasState([string]$AliasName,[string]$TargetAddr,[string]$Rid,[string]$Dir) {
+          function Import-State([string]$Rid) {
             try {
-              Push-Location $Dir
+              Push-Location $tfDir
               terraform init -no-color | Out-Null
-              terraform import -no-color $TargetAddr $Rid 2>$null
-              if ($LASTEXITCODE -ne 0) { Write-Host "terraform import non-zero (may already be in state). Ignored." }
+              terraform import -no-color $targetAddress $Rid 2>$null
             } catch {
-              Write-Host "Import attempt failed (ignored): $($_.Exception.Message)"
+              Write-Host "Import ignored: $($_.Exception.Message)"
             } finally {
               Pop-Location
             }
           }
 
-          Write-Host "== Step0: Existing alias probe =="
-          $existingSubId = Get-SubIdFromAny -AliasName $alias -DisplayName $displayName
+          Write-Host "== Step0: Pre-check alias existence =="
+          $existingSubId = ""
+          for ($i=0; $i -lt 6 -and -not $existingSubId; $i++) {
+            $existingSubId = Get-SubIdFromAlias -AliasName $alias
+            if ($existingSubId) { break }
+            Start-Sleep -Seconds 5
+          }
           if ($existingSubId) {
-            Write-Host "Alias already exists. Skipping creation. alias=$alias subId=$existingSubId"
-            Import-AliasState -AliasName $alias -TargetAddr $targetAddress -Rid $aliasRid -Dir $tfDir
+            Write-Host "Alias exists. Skip creation. alias=$alias subId=$existingSubId"
+            Import-State -Rid $aliasRid
             Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existingSubId"
             return
           }
 
-            # Create new alias (targeted apply)
           Write-Host "Alias not found. Creating..."
           Push-Location $tfDir
           $created = $false
           try {
-            Write-Host "terraform init"
             terraform init -no-color
             if ($LASTEXITCODE -ne 0) { throw "terraform init failed." }
-
-            Write-Host "terraform apply -target=$targetAddress"
             terraform apply -no-color -auto-approve -target=$targetAddress
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Initial apply failed (exit $LASTEXITCODE). Checking if alias appeared..."
-            } else {
+            if ($LASTEXITCODE -eq 0) {
               $created = $true
+            } else {
+              Write-Warning "terraform apply failed (exit $LASTEXITCODE). Will poll for alias anyway."
             }
           } catch {
-            Write-Warning "Apply threw exception: $($_.Exception.Message)"
+            Write-Warning "Exception during apply: $($_.Exception.Message)"
           } finally {
             Pop-Location
           }
 
-          # Resolve subscriptionId (poll up to 6m)
           $subId = ""
-          $maxAttempts = 36
-          for ($i=0; $i -lt $maxAttempts -and -not $subId; $i++) {
-            $subId = Get-SubIdFromAny -AliasName $alias -DisplayName $displayName
+          for ($i=0; $i -lt 36 -and -not $subId; $i++) {
+            $subId = Get-SubIdFromAlias -AliasName $alias
             if ($subId) { break }
             Start-Sleep -Seconds 10
           }
-
           if (-not $subId) {
-            throw "Alias creation (or detection) failed: subscriptionId not found after ${( $maxAttempts * 10 )} seconds."
+            throw "SubscriptionId not resolved (alias=$alias) after 360s."
+          }
+
+          if (-not $created) {
+            Write-Host "Apply not confirmed; importing existing alias into state."
+            Import-State -Rid $aliasRid
           }
 
           Write-Host "subscriptionId acquired: $subId"
-          # Import into state if apply failed but alias exists
-          if (-not $created) {
-            Write-Host "Apply was not confirmed successful; importing alias into state..."
-            Import-AliasState -AliasName $alias -TargetAddr $targetAddress -Rid $aliasRid -Dir $tfDir
-          }
           Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
 
     - task: PowerShell@2
@@ -234,7 +214,7 @@ stages:
             if ("$(createSubscriptionFlag)" -eq "true") {
               throw "Spoke subscription ID could not be resolved (creation expected)."
             } else {
-              throw "spoke_subscription_id must be set in terraform.tfvars (create_subscription=false)."
+              throw "spoke_subscription_id must be set (create_subscription=false)."
             }
           }
           Write-Host "Using Spoke Subscription ID: $final"
@@ -248,12 +228,12 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
           $tfDir = "$(tfDir)"
-          az account set --subscription "$(finalSpokeSubscriptionId)"
+            az account set --subscription "$(finalSpokeSubscriptionId)"
           Push-Location $tfDir
           try {
             terraform init -no-color
@@ -268,7 +248,7 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -287,7 +267,7 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -309,7 +289,7 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -327,7 +307,7 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -346,7 +326,7 @@ stages:
         TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
@@ -363,7 +343,7 @@ stages:
         ARM_USE_AZCLI_AUTH: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
-        scriptType: ps
+        scriptType: pscore
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
