@@ -1,4 +1,9 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Step targets, Step0 minimal fix)
+# subscription-api / azure-pipelines.yml (Single Stage + Step targets, Step0 minimal fix v2)
+# 変更点 (v2):
+#   - Step0 を plan+apply（二段階）→ 直接 apply（単段階）に変更
+#   - -target のリソースアドレスから [0] を外し count 付きでも汎用アドレスを利用
+#   - data ソースはターゲットしない
+#   - エラー原因だった plan コマンド引数解析を排除
 trigger: none
 pr: none
 
@@ -83,7 +88,7 @@ stages:
           $tfDir  = "$(Build.SourcesDirectory)\terraform"
           $tfvars = Join-Path $tfDir "terraform.tfvars"
           if (-not (Test-Path $tfDir))  { throw "Terraform directory not found: $tfDir" }
-            if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
+          if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
 
           function Get-TfvarsValue([string]$Path, [string]$Key) {
             $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
@@ -106,10 +111,10 @@ stages:
           Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
           Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
-    # Step0: Subscription Alias 作成 (dataソースは target しない)
+    # Step0: Subscription Alias 直接 targeted apply（plan 省略 / data ソース未 target）
     - task: AzureCLI@2
       name: step0
-      displayName: "Step0 - Create Subscription (targeted plan+apply)"
+      displayName: "Step0 - Create Subscription (direct targeted apply)"
       condition: and(succeeded(), eq(variables.createSubscriptionFlag, 'true'), eq(variables.spokeSubIdFromTfvars, ''))
       env:
         ARM_USE_AZCLI_AUTH: 'true'
@@ -125,6 +130,7 @@ stages:
 
           Push-Location $tfDir
           try {
+            Write-Host "== terraform init =="
             terraform init -no-color
             if ($LASTEXITCODE -ne 0) { throw "terraform init failed." }
 
@@ -139,23 +145,20 @@ stages:
               return
             }
 
-            Write-Host "Planning (targeted resource only)..."
-            terraform plan -no-color -input=false -out=stage0.plan -target=azapi_resource.subscription[0]
-            if ($LASTEXITCODE -ne 0) { throw "terraform plan (targeted) failed." }
+            Write-Host "== terraform apply (target: azapi_resource.subscription) =="
+            terraform apply -no-color -auto-approve -target=azapi_resource.subscription
+            if ($LASTEXITCODE -ne 0) { throw "terraform apply (target) failed." }
 
-            Write-Host "Applying (plan file)..."
-            terraform apply -no-color -auto-approve stage0.plan
-            if ($LASTEXITCODE -ne 0) { throw "terraform apply (targeted plan) failed." }
-
-            # Output 試行 (data ソースは target していないため空の場合あり)
+            # Output 取得（data を target していないので output が空なら CLI ポーリング）
             $subId = ""
             try { $subId = terraform output -raw subscription_id 2>$null } catch {}
             if (-not $subId) {
-              Write-Host "subscription_id not in output yet. Polling alias via CLI..."
+              Write-Host "terraform output 'subscription_id' empty. Polling alias..."
               for ($i=0; $i -lt 30 -and -not $subId; $i++) {
                 Start-Sleep -Seconds 10
                 try {
                   $subId = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
+                  if ($subId) { break }
                 } catch {}
               }
             }
