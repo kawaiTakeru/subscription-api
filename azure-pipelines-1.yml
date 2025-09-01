@@ -1,50 +1,51 @@
+# mi-pipeline-api (Managed Identity / federated) を使って
+# ARM と Graph をそれぞれ個別に検証するワンファイル
 trigger: none
+
 pool:
   vmImage: ubuntu-latest
 
 steps:
+# ===== ARM 単体 =====
 - task: AzureCLI@2
-  displayName: "Test ARM token"
+  displayName: "ARM only: token & simple call"
   inputs:
-    azureSubscription: 'mi-pipeline-api'   # サービス接続名
-    scriptType: bash
-    scriptLocation: inlineScript
-    inlineScript: |
-      echo "=== ARM token ==="
-      az account get-access-token --resource https://management.azure.com
-
-      echo "=== Graph token ==="
-      az account get-access-token --resource https://graph.microsoft.com
-
-- task: AzureCLI@2
-  displayName: "Test ARM + Graph (token & simple API)"
-  inputs:
-    azureSubscription: 'mi-pipeline-api'   # 作成した Service connection 名
+    azureSubscription: 'mi-pipeline-api'   # Service connection 名
     scriptType: bash
     scriptLocation: inlineScript
     inlineScript: |
       set -e
-
-      echo "=== Who am I (should be servicePrincipal) ==="
+      echo "== Who am I (ARM context) =="
       az account show --query "{tenantId:tenantId, name:name, user:user}" -o table
 
       echo ""
-      echo "=== ARM token (head only) ==="
-      az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | cut -c1-60
+      echo "== ARM token (head) =="
+      az account get-access-token --resource https://management.azure.com \
+        --query accessToken -o tsv | cut -c1-60
 
       echo ""
-      echo "=== Call ARM API: list subscriptions (first 2) ==="
+      echo "== ARM call: list subscriptions =="
       az rest --method get \
         --url "https://management.azure.com/subscriptions?api-version=2020-01-01" \
-        --query "value[].{id:subscriptionId, displayName:displayName}" -o table | head -n 5
+        --query "value[].{subscriptionId:subscriptionId, displayName:displayName}" -o table | head -n 10
+
+# ===== Graph 単体 =====
+- task: AzureCLI@2
+  displayName: "Graph only: token & /organization"
+  continueOnError: true   # 権限未付与でも全体は失敗にしない
+  inputs:
+    azureSubscription: 'mi-pipeline-api'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -e
+      echo "== Graph token (head) =="
+      az account get-access-token --resource https://graph.microsoft.com \
+        --query accessToken -o tsv | cut -c1-60
 
       echo ""
-      echo "=== Graph token (head only) ==="
-      az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv | cut -c1-60
-
-      echo ""
-      echo "=== Call Graph API: organization ==="
+      echo "== Graph call: /organization =="
       az rest --resource https://graph.microsoft.com \
         --method get \
-        --url "https://graph.microsoft.com/v1.0/organization" \
-        --query "value[0].{id:id, displayName:displayName, tenantId:tenantId}" -o table
+        --url "https://graph.microsoft.com/v1.0/organization?$select=id,displayName,tenantType" \
+        --query "value[0]" -o table
