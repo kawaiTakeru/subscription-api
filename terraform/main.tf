@@ -1,11 +1,14 @@
 #############################################
-# Combined Terraform (Stages 0 ~ 4b)
-# - Step0: Subscription (AzAPI)
-# - Step1: Resource Group
-# - Step2: Virtual Network (IPAM)
-# - Step3: Subnet + NSG + Association (IPAM)
-# - Step4a: Peering Hub -> Spoke
-# - Step4b: Peering Spoke -> Hub
+# Combined Terraform Root (Stages 0~4b)
+# 改訂ポイント:
+#  - need_create_subscription = create_subscription && spoke_subscription_id=="" に変更
+#  - data.azapi_resource.subscription_get も同じ条件で count
+#  - effective_spoke_subscription_id をローカルで集約
+#  - Peering の remote_virtual_network_id は local.effective_spoke_subscription_id を使用
+#  - 既存利用 (spoke_subscription_id 指定 / create=false) 時は alias リソース未作成
+#  - 新規作成後 pipeline から TF_VAR_spoke_subscription_id を注入すると
+#    次回以降 need_create_subscription=false となり再作成を抑制 (subscription を継続管理したい場合は
+#    pipeline 側で overrideCreateSubscription=true を維持するか、設計に応じて調整)
 #############################################
 
 terraform {
@@ -26,40 +29,50 @@ terraform {
 # Providers
 #############################################
 
-# Azure CLI 認証 (パイプラインで ARM_USE_AZCLI_AUTH=true)
 provider "azapi" {
   use_cli = true
   use_msi = false
 }
 
-# Spoke (作成した / 既存のサブスクリプション) 用
-# Step A (subscription 未確定時) は -target で azapi_resource.* のみを apply し、
-# この provider が実際のリソース作成に使われないようにします。
+# Spoke Provider:
+# spoke_subscription_id 未確定時は subscription_id を省略し CLI 既定 (service connection) に委譲。
+# Step0 では -target で azapi_resource.subscription[...] のみ apply するため spoke 側リソースは未評価。
 provider "azurerm" {
-  alias           = "spoke"
-  features        {}
-  subscription_id = var.spoke_subscription_id
-  tenant_id       = var.spoke_tenant_id
+  alias    = "spoke"
+  features {}
+  # var.spoke_subscription_id が空なら省略 (CLI の current subscription)
+  # NOTE: 空 GUID を入れると失敗するため条件分岐。
+  subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
+  tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
-# Hub サブスクリプション（既存）
 provider "azurerm" {
   alias           = "hub"
   features        {}
   subscription_id = var.hub_subscription_id
-  tenant_id       = var.hub_tenant_id
+  tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
 #############################################
-# ========== Step0: Subscription (AzAPI) ==========
+# Locals
 #############################################
 
 locals {
-  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
+  billing_scope                = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
+  need_create_subscription     = var.create_subscription && var.spoke_subscription_id == ""
+  # subscription_get[0] が存在する時にのみ値を参照
+  effective_spoke_subscription_id = coalesce(
+    var.spoke_subscription_id,
+    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
+  )
 }
 
+#############################################
+# Step0: Subscription (conditional)
+#############################################
+
 resource "azapi_resource" "subscription" {
-  count     = var.create_subscription ? 1 : 0
+  count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = var.subscription_alias_name
   parent_id = "/"
@@ -75,9 +88,14 @@ resource "azapi_resource" "subscription" {
     read   = "5m"
     delete = "30m"
   }
+  lifecycle {
+    # 誤消し防止。必要に応じて true にする。
+    prevent_destroy = false
+  }
 }
 
 data "azapi_resource" "subscription_get" {
+  count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = var.subscription_alias_name
   parent_id = "/"
@@ -86,28 +104,20 @@ data "azapi_resource" "subscription_get" {
 }
 
 #############################################
-# ========== Step1: Resource Group ==========
+# Step1: Resource Group
 #############################################
-# NOTE:
-#   - Step0 後に terraform output -raw subscription_id を取得し
-#     それを spoke_subscription_id に渡して再 apply してください。
-#   - 既存サブスクリプション流用時 (create_subscription=false) は
-#     最初から spoke_subscription_id を指定し一括 apply が可能。
 
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = var.rg_name
   location = var.location
-
-  # create_subscription=true でまだ subscription_id 未注入の初回 run を避けるための保険:
-  # （実際の運用では Step0 のみ -target 指定 ⇒ ここは未評価になるので通常不要）
   lifecycle {
     prevent_destroy = false
   }
 }
 
 #############################################
-# ========== Step2: Virtual Network (IPAM) ==========
+# Step2: Virtual Network (IPAM)
 #############################################
 
 resource "azurerm_virtual_network" "vnet" {
@@ -116,7 +126,6 @@ resource "azurerm_virtual_network" "vnet" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  # IPAM 自動割当
   ip_address_pool {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.vnet_number_of_ips
@@ -124,7 +133,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 #############################################
-# ========== Step3: Subnet + NSG + Association (IPAM) ==========
+# Step3: Subnet + NSG + Association
 #############################################
 
 resource "azurerm_network_security_group" "subnet_nsg" {
@@ -164,7 +173,6 @@ resource "azurerm_subnet" "subnet" {
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
 
-  # IPAM 自動割当
   ip_address_pool {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.subnet_number_of_ips
@@ -178,28 +186,28 @@ resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
 }
 
 #############################################
-# ========== Step4a: Peering Hub -> Spoke ==========
+# Step4a: Peering Hub -> Spoke
 #############################################
-# Hub 側で作成するピア（allow_gateway_transit=true / use_remote_gateways=false）
 
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = "hub-to-spoke"
   resource_group_name       = var.hub_rg_name
   virtual_network_name      = var.hub_vnet_name
-  remote_virtual_network_id = "/subscriptions/${coalesce(var.spoke_subscription_id, data.azapi_resource.subscription_get.output.properties.subscriptionId)}/resourceGroups/${var.rg_name}/providers/Microsoft.Network/virtualNetworks/${var.vnet_name}"
+  remote_virtual_network_id = "/subscriptions/${local.effective_spoke_subscription_id}/resourceGroups/${var.rg_name}/providers/Microsoft.Network/virtualNetworks/${var.vnet_name}"
 
   allow_forwarded_traffic = true
   allow_gateway_transit   = true
   use_remote_gateways     = false
 
-  depends_on = [azurerm_virtual_network.vnet]
+  depends_on = [
+    azurerm_virtual_network.vnet
+  ]
 }
 
 #############################################
-# ========== Step4b: Peering Spoke -> Hub ==========
+# Step4b: Peering Spoke -> Hub
 #############################################
-# Spoke 側で作成するピア（use_remote_gateways=true）
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
@@ -223,8 +231,8 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 #############################################
 
 output "subscription_id" {
-  description = "Created or existing subscriptionId (from alias)"
-  value       = try(data.azapi_resource.subscription_get.output.properties.subscriptionId, null)
+  description = "Effective subscriptionId (new or existing)"
+  value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
 }
 
 output "alias_name" {
