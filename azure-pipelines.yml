@@ -1,11 +1,26 @@
-# subscription-api / azure-pipelines.yml (Consolidated Single Stage + Step targets)
-# 目的: 1 つの Terraform ルート (terraform/combined) を段階的 (-target) に適用
-# 注意:
-#   - Step0 でサブスクリプション(エイリアス)作成が必要な場合のみ targeted apply
-#   - Step0 -> 出力 subscriptionId を後続 Step に TF_VAR_spoke_subscription_id として渡す
-#   - WHOAMI ステップのパイプエラー修正済み（Write-Host へパイプしない）
-#   - 必要に応じて Final Full Apply を有効化し drift/未適用差分を同期
-
+# subscription-api / azure-pipelines.yml (Unified single Terraform root: terraform/)
+# ---------------------------------------------------------------------------------
+# 前提:
+#   * すべての Terraform コードは repo 直下の terraform/ フォルダに統合 (main.tf / variables.tf / terraform.tfvars)
+#   * 以前のエラー: "Terraform directory not found: ...\terraform\combined" は
+#       パイプラインが存在しないパス (terraform/combined) を参照していたため。
+#   * 本 YAML は単一 Stage / 単一 Job の中を Step (Step0～Step4b) に分割し、-target で進行する構成。
+#   * terraform.tfvars は .gitignore で除外されているため、ビルドエージェント上に必ず配置すること。
+#       - 方法1: Secure Files でアップロード → ダウンロード Step 追加
+#       - 方法2: ランナー変数/Variable Group から環境変数 TF_VAR_* で渡す
+#       - 方法3: terraform.tfvars.example を commit しパイプラインでコピー (秘匿値は含めない)
+#
+# 変更点:
+#   - tfDir を terraform/ に修正
+#   - WHOAMI ステップのパイプエラー修正済み
+#   - tfvars 不在時の明示エラー & .tfvars.example フォールバック例 (オプション)
+#   - 各 Step で terraform init は最初 (RG Step) のみ必須だが、明示性のため複数回行ってもよい
+#   - 途中で create_subscription=true の場合は Step0 で alias 作成 → Spoke Subscription ID を後続へ伝搬
+#
+# 必要に応じて:
+#   - 最終 Full Apply を有効化 (drift/依存解決)
+#   - remote backend (Azure Storage) を追加
+#
 trigger: none
 pr: none
 
@@ -21,7 +36,7 @@ stages:
   displayName: "Provision (Subscription→RG→VNet→Subnet→Peering)"
   jobs:
   - job: terraform_job
-    displayName: "Terraform Orchestration (single state)"
+    displayName: "Terraform Orchestration (single root folder)"
     steps:
     - checkout: self
 
@@ -35,6 +50,19 @@ stages:
         Write-Host "Agent OS    : $env:AGENT_OS"
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
+
+    # (任意) terraform.tfvars.example から terraform.tfvars を生成する簡易フォールバック
+    # 秘匿値を含まない場合のみ使用。秘密がある場合は他手段で配置してください。
+    - powershell: |
+        $tfDir = "$(Build.SourcesDirectory)\terraform"
+        $example = Join-Path $tfDir "terraform.tfvars.example"
+        $target  = Join-Path $tfDir "terraform.tfvars"
+        if (-not (Test-Path $target) -and (Test-Path $example)) {
+          Copy-Item $example $target
+          Write-Host "Copied terraform.tfvars.example to terraform.tfvars (fallback)."
+        }
+      displayName: "Optional: copy example tfvars if missing"
+      continueOnError: true
 
     # ===================== WHOAMI (修正版) =====================
     - task: AzureCLI@2
@@ -58,8 +86,8 @@ stages:
           Write-Host "subscription  : $subName"
           Write-Host "subscriptionId: $subId"
           Write-Host "clientId      : $clientId"
-
           Write-Host ""
+
           Write-Host "== Role Assignments (current SP) =="
           try {
             $sp = az ad sp show --id $clientId -o json 2>$null | ConvertFrom-Json
@@ -85,30 +113,33 @@ stages:
         targetType: inline
         script: |
           $ErrorActionPreference='Stop'
-          $tfDir  = "$(Build.SourcesDirectory)\terraform\combined"
+          $tfDir  = "$(Build.SourcesDirectory)\terraform"
           $tfvars = Join-Path $tfDir "terraform.tfvars"
           if (-not (Test-Path $tfDir))  { throw "Terraform directory not found: $tfDir" }
-          if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
+          if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars (パイプラインへ配置してください)" }
 
-            function Get-TfvarsValue([string]$Path, [string]$Key) {
-              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-              if (-not $line) { return "" }
-              $val = $line -replace "^\s*$Key\s*=\s*", ""
-              $val = $val.Trim().Trim('"')
-              return $val
-            }
+          function Get-TfvarsValue([string]$Path, [string]$Key) {
+            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+            if (-not $line) { return "" }
+            $val = $line -replace "^\s*$Key\s*=\s*", ""
+            $val = $val.Trim()
+            # 末尾コメント除去
+            if ($val -match "#") { $val = ($val -split "#")[0].Trim() }
+            $val = $val.Trim('"')
+            return $val
+          }
 
-            $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
-            if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
-            $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
-            $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
+          $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
+          if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
+          $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
+          $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
 
-            Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
+          Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
 
-            Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
-            Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
-            Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
-            Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
+          Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
+          Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
+          Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
+          Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
     # ----------------------------------------------------
     # Step0: サブスクリプション作成 (必要時のみ)
@@ -125,9 +156,9 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $tfDir = "$(tfDir)"
-          $alias = "$(aliasName)"
-          if (-not $alias) { throw "subscription_alias_name not found in tfvars (alias is empty)" }
+          $tfDir  = "$(tfDir)"
+          $alias  = "$(aliasName)"
+          if (-not $alias) { throw "subscription_alias_name not found in tfvars (empty)" }
 
           Push-Location $tfDir
           try {
@@ -140,18 +171,16 @@ stages:
             } catch {}
 
             if ($existing) {
-              Write-Host "Alias already exists: $alias -> $existing (skip targeted apply)"
+              Write-Host "Alias already exists: $alias -> $existing (skip creation)"
               Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existing"
               return
             }
 
             Write-Host "Creating subscription alias via targeted apply..."
-            terraform apply -no-color -auto-approve `
-              -target=azapi_resource.subscription `
-              -target=data.azapi_resource.subscription_get
+            terraform apply -no-color -auto-approve -target=azapi_resource.subscription -target=data.azapi_resource.subscription_get
             if ($LASTEXITCODE -ne 0) { throw "Targeted apply failed." }
 
-            # 出力取得 (Terraform output or fallback polling)
+            # output 取得 or ポーリング
             $subId = ""
             try { $subId = terraform output -raw subscription_id 2>$null } catch {}
             if (-not $subId) {
@@ -164,7 +193,6 @@ stages:
               }
             }
             if (-not $subId) { throw "Failed to resolve subscriptionId for alias $alias." }
-
             Write-Host "Resolved subscriptionId=$subId"
             Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
           } finally {
@@ -307,7 +335,7 @@ stages:
           } finally { Pop-Location }
 
     # ----------------------------------------------------
-    # (任意) フル適用
+    # (任意) フル適用 (drift / 依存最終調整)
     # ----------------------------------------------------
     - task: AzureCLI@2
       displayName: "Final (Optional) Full Apply"
@@ -330,7 +358,7 @@ stages:
           } finally { Pop-Location }
 
     # ----------------------------------------------------
-    # 検証: Peering 状態
+    # 検証: Peering 状態 (spoke->hub)
     # ----------------------------------------------------
     - task: AzureCLI@2
       displayName: "Verify Peering (spoke-to-hub)"
