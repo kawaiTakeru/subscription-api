@@ -65,7 +65,7 @@ stages:
           }
 
           $createRaw = Get-TfVar $tfvars "create_subscription"
-          $create = if ($createRaw -match '^(?i:true|1)$') { 'true' } else { 'false' }
+            $create = if ($createRaw -match '^(?i:true|1)$') { 'true' } else { 'false' }
           $aliasName = Get-TfVar $tfvars "subscription_alias_name"
           $spokeId   = Get-TfVar $tfvars "spoke_subscription_id"
           $hubSub    = Get-TfVar $tfvars "hub_subscription_id"
@@ -90,7 +90,6 @@ stages:
           $alias = "$(aliasName)"
           if (-not $alias) { throw "subscription_alias_name missing." }
           $tfDir = "$(tfDir)"
-          $targetAddress = "azapi_resource.subscription[0]"
 
           function GetSubId([string]$Alias) {
             if (-not $Alias) { return "" }
@@ -119,12 +118,13 @@ stages:
           try {
             terraform init -no-color
             if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
-            terraform apply -no-color -auto-approve -target=$targetAddress
+            # 修正: 変数経由せず直接ターゲットを指定 (以前は -target=$targetAddress が未展開でエラー)
+            terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
             if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias) failed" }
           } finally { Pop-Location }
 
           # Poll
-            $subId=""
+          $subId=""
           for($i=0;$i -lt 36 -and -not $subId;$i++){
             $subId = GetSubId $alias
             if($subId){break}
