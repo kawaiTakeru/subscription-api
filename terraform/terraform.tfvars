@@ -1,125 +1,42 @@
-#############################################
-# Subscription (Stage0 相当)
-#############################################
-variable "subscription_alias_name" {
-  description = "内部で使われるサブスクリプションエイリアス名"
-  type        = string
-}
-variable "subscription_display_name" {
-  description = "ポータル表示名"
-  type        = string
-}
-variable "billing_account_name" {
-  description = "課金アカウント名"
-  type        = string
-}
-variable "billing_profile_name" {
-  description = "課金プロファイル名"
-  type        = string
-}
-variable "invoice_section_name" {
-  description = "請求セクション名"
-  type        = string
-}
-variable "subscription_workload" {
-  description = "Workload 種別 (Production / DevTest)"
-  type        = string
-  default     = "Production"
-}
-variable "create_subscription" {
-  description = "サブスクリプション(エイリアス)を新規作成するか"
-  type        = bool
-  default     = true
-}
-variable "enable_billing_check" {
-  description = "Billing 読み取りチェック (未使用: 将来拡張用)"
-  type        = bool
-  default     = false
-}
+# ==============================
+# Subscription (Step0)
+# ==============================
+subscription_alias_name   = "cr_subscription_test_109"
+subscription_display_name = "CR 検証サブスクリプション 109"
+billing_account_name      = "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84-9d39-05562a37bab0_2019-05-31"
+billing_profile_name      = "IAMZ-4Q5A-BG7-PGB"
+invoice_section_name      = "6HB2-O3GL-PJA-PGB"
+subscription_workload     = "Production"
+create_subscription       = true
 
-# Spoke サブスクリプション (新規作成後に注入 or 既存)
-variable "spoke_subscription_id" {
-  description = "Spoke Subscription ID (create_subscription=false なら必須。true の場合 Step0 後に再 apply 時に指定)"
-  type        = string
-  default     = ""
-}
+# create_subscription=false の場合はここに既存 subscription を直接記載:
+# spoke_subscription_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
-variable "spoke_tenant_id" {
-  description = "Spoke Tenant ID (必要に応じて設定)"
-  type        = string
-  default     = ""
-}
+# ==============================
+# Hub (Peering)
+# ==============================
+hub_subscription_id = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
+hub_vnet_name       = "vnet-test-hubnw-prd-jpe-001"
+hub_rg_name         = "rg-test-hubnw-prd-jpe-001"
 
-#############################################
-# Hub 側 (Peering 用)
-#############################################
-variable "hub_subscription_id" {
-  description = "Hub Subscription ID"
-  type        = string
-}
-variable "hub_tenant_id" {
-  description = "Hub Tenant ID (必要に応じて)"
-  type        = string
-  default     = ""
-}
-variable "hub_vnet_name" {
-  description = "Hub VNet name"
-  type        = string
-}
-variable "hub_rg_name" {
-  description = "Hub Resource Group name"
-  type        = string
-}
+# ==============================
+# RG (Step1)
+# ==============================
+rg_name  = "rg-from-pipeline"
+location = "japaneast"
 
-#############################################
-# Resource Group (Stage1)
-#############################################
-variable "rg_name" {
-  description = "Resource Group name"
-  type        = string
-}
-variable "location" {
-  description = "Azure region"
-  type        = string
-}
+# ==============================
+# VNet (Step2)
+# ==============================
+vnet_name         = "vnet-from-pipeline"
+ipam_pool_id      = "/subscriptions/6a018b75-55b5-4b68-960d-7328148568aa/resourceGroups/rg-apim-dev/providers/Microsoft.Network/networkManagers/nm-apimdev-ipam/ipamPools/root-10-20"
+vnet_number_of_ips = 1024  # /22 相当
 
-#############################################
-# VNet (Stage2)
-#############################################
-variable "vnet_name" {
-  description = "VNet name"
-  type        = string
-}
-variable "ipam_pool_id" {
-  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
-  type        = string
-}
-variable "vnet_number_of_ips" {
-  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
-  type        = number
-}
-
-#############################################
-# Subnet + NSG (Stage3)
-#############################################
-variable "subnet_name" {
-  description = "Subnet name"
-  type        = string
-}
-variable "subnet_number_of_ips" {
-  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
-  type        = number
-}
-variable "nsg_name" {
-  description = "NSG name"
-  type        = string
-}
-variable "vpn_client_pool_cidr" {
-  description = "VPN クライアントプール CIDR (許可元)"
-  type        = string
-}
-variable "allowed_port" {
-  description = "許可ポート (RDP=3389 / SSH=22 など)"
-  type        = number
-  default     = 3389
-}
+# ==============================
+# Subnet + NSG (Step3)
+# ==============================
+subnet_name          = "subnet-from-pipeline"
+subnet_number_of_ips = 256     # /24 相当
+nsg_name             = "nsg-private-subnet"
+vpn_client_pool_cidr = "172.16.201.0/24"
+allowed_port         = 3389
