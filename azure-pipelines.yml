@@ -1,16 +1,4 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Step targets)
-# 修正点:
-#   * Step0 での targeted apply で "Invalid target" / "Too many command line arguments" が発生したため、
-#       - 直接 terraform apply に -target を並べる方式を廃止
-#       - まず terraform plan で -target を配列引数として渡し plan ファイルを作成
-#       - その後 plan ファイルを terraform apply (plan apply には -target を付けない)
-#       → PowerShell の引数分解/エスケープ影響を排除
-#   * -target の指定は配列 ($targets) を利用し安全に渡す
-#   * 追加: terraform fmt / validate (任意) はコメントアウト例示
-#   * 既存の WHOAMI ステップは修正済み (パイプ使用なし)
-#
-# 前提:
-#   terraform/ 配下に main.tf, variables.tf, terraform.tfvars (または terraform.tfvars はエージェント上で生成/配置)
+# subscription-api / azure-pipelines.yml (Single Stage + Step targets, Step0 target 修正済)
 trigger: none
 pr: none
 
@@ -41,7 +29,6 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
-    # 必要に応じて example をコピー (機微情報が無い場合のみ)
     - powershell: |
         $tfDir = "$(Build.SourcesDirectory)\terraform"
         $example = Join-Path $tfDir "terraform.tfvars.example"
@@ -82,7 +69,6 @@ stages:
             Write-Host "(Role assignment query failed: $($_.Exception.Message))"
           }
 
-    # 事前変数解析
     - task: PowerShell@2
       name: prep
       displayName: "Prepare Variables (parse tfvars)"
@@ -106,19 +92,19 @@ stages:
             return $val
           }
 
-            $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
-            if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
-            $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
-            $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
+          $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
+          if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
+          $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
+          $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
 
-            Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
+          Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
 
-            Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
+          Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
             Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
             Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
             Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
-    # Step0: サブスクリプション (AzAPI) 生成 (必要時)
+    # Step0 修正: target アドレスに [0] を付与
     - task: AzureCLI@2
       name: step0
       displayName: "Step0 - Create Subscription (targeted plan+apply)"
@@ -151,9 +137,9 @@ stages:
               return
             }
 
-            # 安全な target 指定 (配列)
+            # count付きリソースなので [0] を明示
             $targets = @(
-              "-target=azapi_resource.subscription"
+              "-target=azapi_resource.subscription[0]"
               "-target=data.azapi_resource.subscription_get"
             )
 
@@ -165,7 +151,6 @@ stages:
             terraform apply -no-color -auto-approve stage0.plan
             if ($LASTEXITCODE -ne 0) { throw "terraform apply (targeted plan) failed." }
 
-            # Output 取得
             $subId = ""
             try { $subId = terraform output -raw subscription_id 2>$null } catch {}
             if (-not $subId) {
@@ -184,7 +169,6 @@ stages:
             Pop-Location
           }
 
-    # Step0 後: Spoke Subscription ID 決定
     - task: PowerShell@2
       name: decideSub
       displayName: "Decide Spoke Subscription ID"
@@ -205,7 +189,6 @@ stages:
           Write-Host "Using Spoke Subscription ID: $final"
           Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$final"
 
-    # Step1: Resource Group
     - task: AzureCLI@2
       displayName: "Step1 - Apply Resource Group (target)"
       env:
@@ -226,7 +209,6 @@ stages:
             terraform apply -no-color -auto-approve -target=azurerm_resource_group.rg
           } finally { Pop-Location }
 
-    # Step2: VNet
     - task: AzureCLI@2
       displayName: "Step2 - Apply VNet (target)"
       env:
@@ -246,7 +228,6 @@ stages:
             terraform apply -no-color -auto-approve -target=azurerm_virtual_network.vnet
           } finally { Pop-Location }
 
-    # Step3: Subnet + NSG
     - task: AzureCLI@2
       displayName: "Step3 - Apply Subnet / NSG (targets)"
       env:
@@ -269,7 +250,6 @@ stages:
               -target=azurerm_subnet_network_security_group_association.subnet_assoc
           } finally { Pop-Location }
 
-    # Step4a: Hub -> Spoke Peering
     - task: AzureCLI@2
       displayName: "Step4a - Peering Hub→Spoke (target)"
       env:
@@ -288,7 +268,6 @@ stages:
             terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.hub_to_spoke
           } finally { Pop-Location }
 
-    # Step4b: Spoke -> Hub Peering
     - task: AzureCLI@2
       displayName: "Step4b - Peering Spoke→Hub (target)"
       env:
@@ -307,7 +286,6 @@ stages:
             terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.spoke_to_hub
           } finally { Pop-Location }
 
-    # (任意) フル適用
     - task: AzureCLI@2
       displayName: "Final (Optional) Full Apply"
       enabled: false
@@ -328,7 +306,6 @@ stages:
             terraform apply -no-color -auto-approve full.out
           } finally { Pop-Location }
 
-    # Peering 検証
     - task: AzureCLI@2
       displayName: "Verify Peering (spoke-to-hub)"
       env:
