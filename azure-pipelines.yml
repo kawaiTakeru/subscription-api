@@ -1,4 +1,4 @@
-# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0 w/o displayName fallback, PowerShell Core)
+# subscription-api / azure-pipelines.yml (Single Stage + Robust Step0 w/o displayName fallback, PowerShell Core, Step0 exit code fix)
 trigger: none
 pr: none
 
@@ -92,7 +92,7 @@ stages:
             return $val
           }
 
-          $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
+            $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
           if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
           $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
           $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
@@ -143,8 +143,14 @@ stages:
               Push-Location $tfDir
               terraform init -no-color | Out-Null
               terraform import -no-color $targetAddress $Rid 2>$null
+              $code = $LASTEXITCODE
+              if ($code -ne 0) {
+                Write-Warning "terraform import exited with code $code (ignored). Forcing success."
+                $global:LASTEXITCODE = 0
+              }
             } catch {
               Write-Host "Import ignored: $($_.Exception.Message)"
+              $global:LASTEXITCODE = 0
             } finally {
               Pop-Location
             }
@@ -157,11 +163,14 @@ stages:
             if ($existingSubId) { break }
             Start-Sleep -Seconds 5
           }
+
           if ($existingSubId) {
             Write-Host "Alias exists. Skip creation. alias=$alias subId=$existingSubId"
             Import-State -Rid $aliasRid
             Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existingSubId"
-            return
+            $global:LASTEXITCODE = 0
+            Write-Host "Step0 completed (existing alias)."
+            exit 0
           }
 
           Write-Host "Alias not found. Creating..."
@@ -188,6 +197,7 @@ stages:
             if ($subId) { break }
             Start-Sleep -Seconds 10
           }
+
           if (-not $subId) {
             throw "SubscriptionId not resolved (alias=$alias) after 360s."
           }
@@ -199,6 +209,9 @@ stages:
 
           Write-Host "subscriptionId acquired: $subId"
           Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$subId"
+          $global:LASTEXITCODE = 0
+          Write-Host "Step0 completed (created alias)."
+          exit 0
 
     - task: PowerShell@2
       name: decideSub
@@ -233,7 +246,7 @@ stages:
         inlineScript: |
           $ErrorActionPreference='Stop'
           $tfDir = "$(tfDir)"
-            az account set --subscription "$(finalSpokeSubscriptionId)"
+          az account set --subscription "$(finalSpokeSubscriptionId)"
           Push-Location $tfDir
           try {
             terraform init -no-color
