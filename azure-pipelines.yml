@@ -1,4 +1,11 @@
-# subscription-api / azure-pipelines.yml (Consolidated Single Stage + Steps)
+# subscription-api / azure-pipelines.yml (Consolidated Single Stage + Step targets)
+# 目的: 1 つの Terraform ルート (terraform/combined) を段階的 (-target) に適用
+# 注意:
+#   - Step0 でサブスクリプション(エイリアス)作成が必要な場合のみ targeted apply
+#   - Step0 -> 出力 subscriptionId を後続 Step に TF_VAR_spoke_subscription_id として渡す
+#   - WHOAMI ステップのパイプエラー修正済み（Write-Host へパイプしない）
+#   - 必要に応じて Final Full Apply を有効化し drift/未適用差分を同期
+
 trigger: none
 pr: none
 
@@ -29,6 +36,7 @@ stages:
         Write-Host "Agent Ver   : $env:AGENT_VERSION"
       displayName: "Show Agent Info"
 
+    # ===================== WHOAMI (修正版) =====================
     - task: AzureCLI@2
       displayName: "WHOAMI (service connection identity)"
       inputs:
@@ -37,19 +45,36 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          $clientId = az account show --query user.name -o tsv
-              az account show --query tenantId -o tsv | Write-Host "tenantId      : $($_)"
-          az account show --query name -o tsv      | Write-Host "subscription  : $($_)"
-          az account show --query id -o tsv        | Write-Host "subscriptionId: $($_)"
+          $acctJson = az account show -o json
+          if (-not $acctJson) { throw "az account show returned empty." }
+          $acct = $acctJson | ConvertFrom-Json
+          $tenantId = $acct.tenantId
+          $subName  = $acct.name
+          $subId    = $acct.id
+          $clientId = $acct.user.name
+
+          Write-Host "== Service Connection Account =="
+          Write-Host "tenantId      : $tenantId"
+          Write-Host "subscription  : $subName"
+          Write-Host "subscriptionId: $subId"
           Write-Host "clientId      : $clientId"
-          Write-Host "Role Assignments (current SP):"
-          try { 
-            $spObjId = (az ad sp show --id $clientId --query id -o tsv 2>$null)
-            if ($spObjId) { az role assignment list --assignee $spObjId --all -o table }
-          } catch {}
+
+          Write-Host ""
+          Write-Host "== Role Assignments (current SP) =="
+          try {
+            $sp = az ad sp show --id $clientId -o json 2>$null | ConvertFrom-Json
+            if ($sp -and $sp.id) {
+              Write-Host "spObjectId: $($sp.id)"
+              az role assignment list --assignee $sp.id --all -o table
+            } else {
+              Write-Host "(Service principal object not resolved)"
+            }
+          } catch {
+            Write-Host "(Failed to list role assignments: $($_.Exception.Message))"
+          }
 
     # ----------------------------------------------------
-    # 共通設定/関数ロード (PowerShell) - 以後再利用するため変数出力
+    # 事前処理: tfvars から値抽出
     # ----------------------------------------------------
     - task: PowerShell@2
       name: prep
@@ -60,33 +85,33 @@ stages:
         targetType: inline
         script: |
           $ErrorActionPreference='Stop'
-          $tfDir   = "$(Build.SourcesDirectory)\terraform\combined"
-          $tfvars  = Join-Path $tfDir "terraform.tfvars"
+          $tfDir  = "$(Build.SourcesDirectory)\terraform\combined"
+          $tfvars = Join-Path $tfDir "terraform.tfvars"
           if (-not (Test-Path $tfDir))  { throw "Terraform directory not found: $tfDir" }
           if (-not (Test-Path $tfvars)) { throw "terraform.tfvars not found: $tfvars" }
 
-          function Get-TfvarsValue([string]$Path, [string]$Key) {
-            $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-            if (-not $line) { return "" }
-            $val = $line -replace "^\s*$Key\s*=\s*", ""
-            $val = $val.Trim().Trim('"')
-            return $val
-          }
+            function Get-TfvarsValue([string]$Path, [string]$Key) {
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+              if (-not $line) { return "" }
+              $val = $line -replace "^\s*$Key\s*=\s*", ""
+              $val = $val.Trim().Trim('"')
+              return $val
+            }
 
-          $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
-          if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
-          $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
-          $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
+            $createSubscription = (Get-TfvarsValue $tfvars "create_subscription")
+            if ($createSubscription -match '^(?i:true|1)$') { $createSubscription = "true" } else { $createSubscription = "false" }
+            $spokeSubInVars = Get-TfvarsValue $tfvars "spoke_subscription_id"
+            $aliasName      = Get-TfvarsValue $tfvars "subscription_alias_name"
 
-          Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
+            Write-Host "Parsed: create_subscription=$createSubscription, alias=$aliasName, spoke_subscription_id(tfvars)=$spokeSubInVars"
 
-          Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
-          Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
-          Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
-          Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
+            Write-Host "##vso[task.setvariable variable=tfDir]$tfDir"
+            Write-Host "##vso[task.setvariable variable=createSubscriptionFlag]$createSubscription"
+            Write-Host "##vso[task.setvariable variable=aliasName]$aliasName"
+            Write-Host "##vso[task.setvariable variable=spokeSubIdFromTfvars]$spokeSubInVars"
 
     # ----------------------------------------------------
-    # Step0: サブスクリプション作成 (必要な場合のみ)
+    # Step0: サブスクリプション作成 (必要時のみ)
     # ----------------------------------------------------
     - task: AzureCLI@2
       name: step0
@@ -108,27 +133,29 @@ stages:
           try {
             terraform init -no-color
 
-            # 既存 alias があるかチェック
+            # 既存 alias チェック
             $existing = ""
             try {
               $existing = az account alias show --name $alias --query "properties.subscriptionId" -o tsv 2>$null
             } catch {}
 
             if ($existing) {
-              Write-Host "Alias already exists: $alias -> $existing (skip apply)"
+              Write-Host "Alias already exists: $alias -> $existing (skip targeted apply)"
               Write-Host "##vso[task.setvariable variable=spokeSubscriptionId;isOutput=true]$existing"
               return
             }
 
-            Write-Host "Running targeted apply for alias creation..."
-            terraform apply -no-color -auto-approve -target=azapi_resource.subscription -target=data.azapi_resource.subscription_get
+            Write-Host "Creating subscription alias via targeted apply..."
+            terraform apply -no-color -auto-approve `
+              -target=azapi_resource.subscription `
+              -target=data.azapi_resource.subscription_get
             if ($LASTEXITCODE -ne 0) { throw "Targeted apply failed." }
 
-            # 取得 (Terraform output or CLI)
+            # 出力取得 (Terraform output or fallback polling)
             $subId = ""
             try { $subId = terraform output -raw subscription_id 2>$null } catch {}
             if (-not $subId) {
-              Write-Host "subscription_id output not yet populated. Polling AzAPI..."
+              Write-Host "subscription_id not yet in state. Polling AzAPI..."
               for ($i=0; $i -lt 30 -and -not $subId; $i++) {
                 Start-Sleep -Seconds 10
                 try {
@@ -136,7 +163,6 @@ stages:
                 } catch {}
               }
             }
-
             if (-not $subId) { throw "Failed to resolve subscriptionId for alias $alias." }
 
             Write-Host "Resolved subscriptionId=$subId"
@@ -146,7 +172,7 @@ stages:
           }
 
     # ----------------------------------------------------
-    # Step0 (既存流用時または Step0 スキップ時) : subscriptionId 確定
+    # Step0 後: Spoke Subscription ID 決定
     # ----------------------------------------------------
     - task: PowerShell@2
       name: decideSub
@@ -169,13 +195,14 @@ stages:
           Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$final"
 
     # ----------------------------------------------------
-    # Step1: RG
+    # Step1: Resource Group
     # ----------------------------------------------------
     - task: AzureCLI@2
       displayName: "Step1 - Apply Resource Group (target)"
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -198,6 +225,7 @@ stages:
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -219,21 +247,22 @@ stages:
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-            $tfDir = "$(tfDir)"
-            az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location $tfDir
-            try {
-              terraform apply -no-color -auto-approve `
-                -target=azurerm_network_security_group.subnet_nsg `
-                -target=azurerm_subnet.subnet `
-                -target=azurerm_subnet_network_security_group_association.subnet_assoc
-            } finally { Pop-Location }
+          $tfDir = "$(tfDir)"
+          az account set --subscription "$(finalSpokeSubscriptionId)"
+          Push-Location $tfDir
+          try {
+            terraform apply -no-color -auto-approve `
+              -target=azurerm_network_security_group.subnet_nsg `
+              -target=azurerm_subnet.subnet `
+              -target=azurerm_subnet_network_security_group_association.subnet_assoc
+          } finally { Pop-Location }
 
     # ----------------------------------------------------
     # Step4a: Hub -> Spoke Peering
@@ -243,6 +272,7 @@ stages:
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -250,8 +280,6 @@ stages:
         inlineScript: |
           $ErrorActionPreference='Stop'
           $tfDir = "$(tfDir)"
-          # Hub 側サブスクリプションへ切替（variables.tf の hub_subscription_id を tfvars に設定してある前提）
-          # → 直接 hub の subscriptionId をここで az account set しなくても azurerm provider(hub) は CLI 認証 + subscription_id 指定で動作
           Push-Location $tfDir
           try {
             terraform apply -no-color -auto-approve -target=azurerm_virtual_network_peering.hub_to_spoke
@@ -265,6 +293,7 @@ stages:
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -278,14 +307,15 @@ stages:
           } finally { Pop-Location }
 
     # ----------------------------------------------------
-    # (任意) 最終フル apply で drift/残差を解消
+    # (任意) フル適用
     # ----------------------------------------------------
     - task: AzureCLI@2
       displayName: "Final (Optional) Full Apply"
-      enabled: false   # 必要なら true に
+      enabled: false
       env:
         ARM_USE_AZCLI_AUTH: 'true'
         TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+        TF_IN_AUTOMATION: 'true'
       inputs:
         azureSubscription: 'snp-pipeline-api'
         scriptType: ps
@@ -300,7 +330,7 @@ stages:
           } finally { Pop-Location }
 
     # ----------------------------------------------------
-    # 検証: spoke-to-hub ピアリング状態チェック
+    # 検証: Peering 状態
     # ----------------------------------------------------
     - task: AzureCLI@2
       displayName: "Verify Peering (spoke-to-hub)"
@@ -312,14 +342,13 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           $ErrorActionPreference='Stop'
-          # 変数取得（state を解析するより Azure CLI で直接）
           $tfDir = "$(tfDir)"
-          # hub / spoke の名前は tfvars 上の値と合致している前提で terraform show からも取得可能
           Push-Location $tfDir
           try {
             terraform show -json | Out-File tfstate.json -Encoding utf8
             $json = Get-Content tfstate.json -Raw | ConvertFrom-Json
           } finally { Pop-Location }
+
           $vnetRes = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network" } | Select-Object -First 1
           if (-not $vnetRes) { throw "VNet resource not found in state." }
           $spokeVnet = $vnetRes.values.name
@@ -330,5 +359,8 @@ stages:
               --vnet-name $spokeVnet `
               --name "spoke-to-hub" `
               --query peeringState -o tsv 2>$null
-          if (-not $state) { throw "spoke-to-hub peering not found (RG=$spokeRg VNet=$spokeVnet)" }
+
+          if (-not $state) {
+            throw "spoke-to-hub peering not found (RG=$spokeRg VNet=$spokeVnet)"
+          }
           Write-Host "Peering 'spoke-to-hub' state: $state"
