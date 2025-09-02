@@ -1,8 +1,5 @@
 #############################################
-# main.tf (修正済み)
-#  - need_create_subscription = create_subscription && spoke_subscription_id == ""
-#  - effective_spoke_subscription_id ローカル
-#  - Peering は effective_spoke_subscription_id を使用
+# main.tf (修正済み / BFT-TEST 管理グループ配下に作成)
 #############################################
 
 terraform {
@@ -57,6 +54,11 @@ resource "azapi_resource" "subscription" {
       displayName  = var.subscription_display_name
       billingScope = local.billing_scope
       workload     = var.subscription_workload
+
+      # ★ BFT-TEST 管理グループ配下に作成 ★
+      additionalProperties = {
+        managementGroupId = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+      }
     }
   })
   timeouts {
