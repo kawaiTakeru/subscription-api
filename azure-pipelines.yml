@@ -210,6 +210,50 @@ stages:
           if (-not "$(finalSpokeSubscriptionId)") { throw "finalSpokeSubscriptionId empty" }
         displayName: Debug print normalized vars
 
+      # ▼▼ 追加ステップ：サブスクリプション可視化チェック＋リトライ待ち ▼▼
+      - task: AzureCLI@2
+        name: waitSub
+        displayName: Wait Subscription Visibility (ARM & az account list)
+        inputs:
+          azureSubscription: snp-pipeline-api
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference = 'Stop'
+            $target = "$(finalSpokeSubscriptionId)"
+            if (-not $target) { throw "finalSpokeSubscriptionId empty" }
+
+            Write-Host "Target subscription: $target"
+
+            # 1) ARM でサブスク存在チェック（最大 ~4分）
+            $armOk = $false
+            for ($i=1; $i -le 24; $i++) {
+              try {
+                az rest --method get --url "https://management.azure.com/subscriptions/$target?api-version=2020-01-01" | Out-Null
+                $armOk = $true
+                break
+              } catch {
+                Write-Host "[$i/24] ARM not ready. sleep 10s..."
+                Start-Sleep -Seconds 10
+              }
+            }
+            if (-not $armOk) { throw "ARM endpoint not seeing subscription: $target" }
+
+            # 2) Azure CLI の可視化（--refresh 重要）最大 ~10分
+            $seen = $false
+            for ($i=1; $i -le 40; $i++) {
+              $hit = az account list --refresh --query "[?id=='$target']" -o tsv
+              if ($hit) { $seen = $true; break }
+              Write-Host "[$i/40] not visible to az account list yet. sleep 15s..."
+              Start-Sleep -Seconds 15
+            }
+            if (-not $seen) { throw "Subscription not visible to Azure CLI after retries: $target" }
+
+            # 3) ここで切替（以降の Step1〜 で即使える）
+            az account set --subscription $target
+            az account show --query "{id:id,name:name,isDefault:isDefault}" -o tsv
+      # ▲▲ 追加ステップ終わり ▲▲
+
       - task: AzureCLI@2
         displayName: Step1 - Resource Group
         env:
