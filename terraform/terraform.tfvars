@@ -1,16 +1,13 @@
 # ==============================
 # Subscription (Step0)
 # ==============================
-subscription_alias_name   = "cr_subscription_test_119"
-subscription_display_name = "CR 検証サブスクリプション 119"
+subscription_alias_name   = "cr_subscription_test_117"
+subscription_display_name = "CR 検証サブスクリプション 117"
 billing_account_name      = "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84-9d39-05562a37bab0_2019-05-31"
 billing_profile_name      = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name      = "6HB2-O3GL-PJA-PGB"
 subscription_workload     = "Production"
 create_subscription       = true
-
-# 既存を使う場合は create_subscription=false にし、下を設定:
-# spoke_subscription_id  = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # ==============================
 # RG (Step1)
