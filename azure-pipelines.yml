@@ -307,3 +307,26 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
 
+      # （任意）検証ステップ - 必要ならコメント解除
+      # - task: AzureCLI@2
+      #   displayName: (Optional) Verify Peering and Plan
+      #   env:
+      #     ARM_USE_AZCLI_AUTH: 'true'
+      #     TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+      #     TF_VAR_create_subscription: false
+      #   inputs:
+      #     azureSubscription: snp-pipeline-api
+      #     scriptType: pscore
+      #     scriptLocation: inlineScript
+      #     inlineScript: |
+      #       $ErrorActionPreference='Stop'
+      #       az account set --subscription "$(finalSpokeSubscriptionId)"
+      #       Push-Location "$(Build.SourcesDirectory)/terraform"
+      #       try {
+      #         terraform init -no-color | Out-Null
+      #         # 状態確認（例）
+      #         $json = terraform show -json | ConvertFrom-Json
+      #         $net = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network_peering" }
+      #         Write-Host "Peering resources found: " ($net | ForEach-Object { $_.name }) -join ", "
+      #         terraform plan -no-color
+      #       } finally { Pop-Location }
