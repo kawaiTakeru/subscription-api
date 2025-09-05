@@ -9,6 +9,9 @@ invoice_section_name      = "6HB2-O3GL-PJA-PGB"
 subscription_workload     = "Production"
 create_subscription       = true
 
+# 既存を使う場合は create_subscription=false にし、下を設定:
+# spoke_subscription_id  = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
 # ==============================
 # RG (Step1)
 # ==============================
