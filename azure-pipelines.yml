@@ -6,7 +6,7 @@ pool:
 
 variables:
   - name: System.Debug
-    value: true
+    value: false
   - name: USE_TARGETED_APPLY
     value: true   # 安定稼働後は false 推奨
 
