@@ -47,8 +47,9 @@ locals {
   )
 
   # Slug from project/purpose (ASCII のみ)
-  project_slug       = lower(regexreplace(var.project_name, "[^a-zA-Z0-9]", ""))
-  purpose_slug_base  = lower(regexreplace(var.purpose_name, "[^a-zA-Z0-9]", ""))
+  # regexreplace が使えないため、regexall で許可文字だけ抜き出して join する
+  project_slug       = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
+  purpose_slug_base  = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
   purpose_slug       = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
   )
