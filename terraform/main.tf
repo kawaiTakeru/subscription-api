@@ -1,5 +1,5 @@
 #############################################
-# main.tf（2変数命名・二重ハイフン防止）
+# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
 #############################################
 
 terraform {
@@ -36,30 +36,30 @@ provider "azurerm" {
 }
 
 locals {
-  # 課金スコープ
+  # Billing scope
   billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
 
-  # Subscription 作成要否
+  # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # スラッグ化（regexall + join）
+  # Slug from project/purpose（非英数字を除去して小文字化）
   project_slug      = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
   purpose_slug_base = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
   purpose_slug      = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # 空要素を除外して結合（--防止）
+  # 空要素を除外して結合（--を防止）
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # 各リソース名（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<seq>）
+  # 各リソース名（命名規約準拠）
   name_sub_alias   = "sub-${local.base}"
-  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は用途の原文でもOK
+  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は原文用途でもOK
   name_rg          = "rg-${local.base}"
   name_vnet        = "vnet-${local.base}"
   name_subnet      = "snet-${local.base}"
@@ -71,6 +71,7 @@ locals {
   nsg_rule_deny_name  = "nsgr-${local.base}-002"
 }
 
+# Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
@@ -102,12 +103,14 @@ data "azapi_resource" "subscription_get" {
   depends_on = [azapi_resource.subscription]
 }
 
+# RG
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
 }
 
+# VNet
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -120,6 +123,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
+# NSG
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -151,6 +155,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
+# Subnet
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -163,12 +168,14 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
+# NSG Association
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
+# Peering Hub -> Spoke
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = local.name_peer
@@ -183,6 +190,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
+# Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
   name                      = local.name_peer
