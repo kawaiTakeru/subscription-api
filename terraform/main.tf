@@ -1,5 +1,5 @@
 #############################################
-# main.tf（slug 生成ロジックを regexall+join に変更）
+# main.tf
 #############################################
 
 terraform {
@@ -36,23 +36,28 @@ provider "azurerm" {
 }
 
 locals {
+  # 課金スコープ
   billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
 
+  # Subscription 作成要否
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # Slug 化（regexall で許可文字のみ抽出）
+  # スラッグ化（regexreplace 非依存: regexall + join）
   project_slug      = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
   purpose_slug_base = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
   purpose_slug      = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  base = "${local.project_slug}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}"
+  # 空要素を除外してから結合 ⇒ 二重ハイフンを防止
+  base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
+  base       = join("-", local.base_parts)
 
+  # 各リソース名
   name_sub_alias   = "sub-${local.base}"
   name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}"
   name_rg          = "rg-${local.base}"
@@ -61,6 +66,7 @@ locals {
   name_nsg         = "nsg-${local.base}"
   name_peer        = "peer-${local.base}"
 
+  # NSG ルール名（通番）
   nsg_rule_allow_name = "nsgr-${local.base}-001"
   nsg_rule_deny_name  = "nsgr-${local.base}-002"
 }
