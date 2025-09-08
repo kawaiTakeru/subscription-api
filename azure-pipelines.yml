@@ -62,18 +62,17 @@ stages:
             $projectName = Get-TfVar $tfvars "project_name"
             $purposeName = Get-TfVar $tfvars "purpose_name"
             $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
+            $region      = (Get-TfVar $tfvars "region");         if (-not $region) { $region = "japaneast" }
             $regionCode  = (Get-TfVar $tfvars "region_code");    if (-not $regionCode) { $regionCode = "jpe" }
             $seq         = (Get-TfVar $tfvars "sequence");       if (-not $seq) { $seq = "001" }
 
             $projSlug    = To-Slug $projectName
             $purposeSlug = To-Slug $purposeName
-            if (-not $purposeSlug) {
-              if ($purposeName -eq "検証") { $purposeSlug = "kensho" }
-            }
-            if (-not $projSlug -or -not $purposeSlug) {
-              throw "project_name/purpose_name cannot be converted to ASCII slug. project='$projectName' purpose='$purposeName'"
-            }
-            $base      = "$projSlug-$purposeSlug-$envId-$regionCode-$seq"
+            if (-not $purposeSlug -and $purposeName -eq "検証") { $purposeSlug = "kensho" }
+
+            # 空要素を除外して結合（--防止）
+            $parts = @($projSlug, $purposeSlug, $envId, $regionCode, $seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+            $base  = ($parts -join "-")
             $aliasName = "sub-$base"
 
             $createRaw   = Get-TfVar $tfvars "create_subscription"
@@ -103,19 +102,24 @@ stages:
             $aliasCreatedNew = "false"
 
             if (-not $createFlag) {
+              # 既存利用モード
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
               Write-Host "Using provided existing subscription: $finalSubId"
             } else {
+              # create_subscription=true
               if ($spokeIdInTf) {
+                # create=true かつ spoke_subscription_id も設定 → 既存IDを優先
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
+                # alias 既存確認
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
                   $finalSubId = $reuseId
                 } else {
+                  if (-not $aliasName) { throw "computed alias is empty; cannot create." }
                   Write-Host "Creating new subscription via Terraform (targeted alias)."
                   Push-Location $tfDir
                   try {
@@ -125,6 +129,7 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
+                    # 出力 (output subscription_id 利用) / Fallback: alias 直接参照
                     $subOut = terraform output -raw subscription_id 2>$null
                     if ($LASTEXITCODE -ne 0 -or -not $subOut) {
                       $subOut = Get-SubscriptionIdFromAlias $aliasName
@@ -138,7 +143,10 @@ stages:
                     if ($LASTEXITCODE -eq 0) {
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
+                    } else {
+                      Write-Host "Alias resource not found in state (continue)."
                     }
+
                     $overrideContent = @(
                       'create_subscription = false'
                       'spoke_subscription_id = "' + $finalSubId + '"'
@@ -150,7 +158,7 @@ stages:
                     Pop-Location
                   }
 
-                  # 可視化待ち (ARM) 短縮
+                  # 可視化待ち (ARM)
                   Write-Host "Waiting for subscription visibility (ARM)..."
                   $armOk = $false
                   for($i=1;$i -le 24;$i++){  # 最大 ~4 分
@@ -167,7 +175,7 @@ stages:
                   # az account list 反映待ち（短縮＆失敗しても続行）
                   Write-Host "Waiting for subscription visibility (az account list)..."
                   $seen = $false
-                  for($i=1;$i -le 10;$i++){  # 最大 ~2.5 分（従来 10 分）
+                  for($i=1;$i -le 10;$i++){  # 最大 ~2.5 分
                     $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
                     if ($hit) { $seen = $true; break }
                     Start-Sleep -Seconds 15
