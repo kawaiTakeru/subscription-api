@@ -1,5 +1,5 @@
 #############################################
-# Naming inputs (最小入力で全命名を生成)
+# Naming inputs（2変数で全命名を駆動）
 #############################################
 variable "project_name" {
   description = "PJ/案件名（例: BFT）"
@@ -33,18 +33,10 @@ variable "sequence" {
 #############################################
 # Subscription (Step0)
 #############################################
-variable "billing_account_name" {
-  description = "課金アカウント名"
-  type        = string
-}
-variable "billing_profile_name" {
-  description = "課金プロファイル名"
-  type        = string
-}
-variable "invoice_section_name" {
-  description = "請求セクション名"
-  type        = string
-}
+variable "billing_account_name" { type = string }
+variable "billing_profile_name" { type = string }
+variable "invoice_section_name" { type = string }
+
 variable "subscription_workload" {
   description = "Workload 種別 (Production / DevTest)"
   type        = string
@@ -77,47 +69,18 @@ variable "management_group_id" {
 }
 
 #############################################
-# Hub 側 (Peering 用)
+# Hub 側 (Peering 用) - 既存参照
 #############################################
-variable "hub_subscription_id" {
-  description = "Hub Subscription ID（既存参照）"
-  type        = string
-}
-variable "hub_tenant_id" {
-  description = "Hub Tenant ID (必要に応じて)"
-  type        = string
-  default     = ""
-}
-variable "hub_vnet_name" {
-  description = "Hub VNet name（既存参照）"
-  type        = string
-}
-variable "hub_rg_name" {
-  description = "Hub Resource Group name（既存参照）"
-  type        = string
-}
+variable "hub_subscription_id" { description = "Hub Subscription ID（既存参照）"; type = string }
+variable "hub_tenant_id"       { description = "Hub Tenant ID (必要に応じて)";     type = string, default = "" }
+variable "hub_vnet_name"       { description = "Hub VNet name（既存参照）";       type = string }
+variable "hub_rg_name"         { description = "Hub Resource Group name（既存参照）"; type = string }
 
 #############################################
 # VNet / Subnet / NSG Inputs
 #############################################
-variable "ipam_pool_id" {
-  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
-  type        = string
-}
-variable "vnet_number_of_ips" {
-  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
-  type        = number
-}
-variable "subnet_number_of_ips" {
-  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
-  type        = number
-}
-variable "vpn_client_pool_cidr" {
-  description = "VPN クライアントプール CIDR (許可元)"
-  type        = string
-}
-variable "allowed_port" {
-  description = "許可ポート (RDP=3389 / SSH=22 など)"
-  type        = number
-  default     = 3389
-}
+variable "ipam_pool_id"        { description = "IPAM Pool Resource ID (VNet/Subnet 共用)"; type = string }
+variable "vnet_number_of_ips"  { description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"; type = number }
+variable "subnet_number_of_ips"{ description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"; type = number }
+variable "vpn_client_pool_cidr"{ description = "VPN クライアントプール CIDR (許可元)"; type = string }
+variable "allowed_port"        { description = "許可ポート (RDP=3389 / SSH=22 など)"; type = number, default = 3389 }
