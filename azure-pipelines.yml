@@ -110,7 +110,7 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output の JSON をパース）
+                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output(JSON) をパース）
                     $subOut = Get-SubscriptionIdFromAlias $aliasName
                     if (-not (Is-Guid $subOut)) {
                       $jsonOut = terraform output -no-color -json 2>$null
