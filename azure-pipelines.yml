@@ -58,7 +58,7 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # 命名ドライバ（.tfvars 冒頭の2変数）
+            # 命名ドライバ
             $projectName = Get-TfVar $tfvars "project_name"
             $purposeName = Get-TfVar $tfvars "purpose_name"
             $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
@@ -102,14 +102,17 @@ stages:
             $aliasCreatedNew = "false"
 
             if (-not $createFlag) {
+              # 既存利用モード
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
               Write-Host "Using provided existing subscription: $finalSubId"
             } else {
+              # create_subscription=true
               if ($spokeIdInTf) {
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
+                # alias 既存確認
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
@@ -125,6 +128,7 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
+                    # 出力 (output subscription_id 利用) / Fallback: alias 直接参照
                     $subOut = terraform output -raw subscription_id 2>$null
                     if ($LASTEXITCODE -ne 0 -or -not $subOut) {
                       $subOut = Get-SubscriptionIdFromAlias $aliasName
@@ -133,6 +137,7 @@ stages:
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
+                    # state から alias を除去 & override.auto.tfvars 生成
                     terraform state show azapi_resource.subscription[0] 1>$null 2>$null
                     if ($LASTEXITCODE -eq 0) {
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
@@ -323,3 +328,23 @@ stages:
               terraform apply -no-color -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
+
+      # （任意）検証ステップ - 必要ならコメント解除
+      # - task: AzureCLI@2
+      #   displayName: (Optional) Verify Peering and Plan
+      #   env:
+      #     ARM_USE_AZCLI_AUTH: 'true'
+      #     TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+      #     TF_VAR_create_subscription: false
+      #   inputs:
+      #     azureSubscription: snp-pipeline-api-wif
+      #     scriptType: pscore
+      #     scriptLocation: inlineScript
+      #     inlineScript: |
+      #       $ErrorActionPreference='Stop'
+      #       az account set --subscription "$(finalSpokeSubscriptionId)"
+      #       Push-Location "$(Build.SourcesDirectory)/terraform"
+      #       try {
+      #         terraform init -no-color | Out-Null
+      #         terraform plan -no-color
+      #       } finally { Pop-Location }
