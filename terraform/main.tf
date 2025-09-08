@@ -55,9 +55,9 @@ resource "azapi_resource" "subscription" {
       billingScope = local.billing_scope
       workload     = var.subscription_workload
 
-      # ★ BFT-TEST 管理グループ配下に作成 ★
+      # ★ 管理グループ配下に作成（変数化）★
       additionalProperties = {
-        managementGroupId = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+        managementGroupId = var.management_group_id
       }
     }
   })
@@ -102,7 +102,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   resource_group_name = azurerm_resource_group.rg.name
 
   security_rule {
-    name                       = "Allow-VPN-Port"
+    name                       = var.nsg_rule_allow_vpn_name
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
@@ -114,7 +114,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 
   security_rule {
-    name                       = "Deny-Internet-Inbound"
+    name                       = var.nsg_rule_deny_internet_name
     priority                   = 200
     direction                  = "Inbound"
     access                     = "Deny"
@@ -146,7 +146,7 @@ resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
 
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
-  name                      = "hub-to-spoke"
+  name                      = var.peering_name_hub_to_spoke
   resource_group_name       = var.hub_rg_name
   virtual_network_name      = var.hub_vnet_name
   remote_virtual_network_id = "/subscriptions/${local.effective_spoke_subscription_id}/resourceGroups/${var.rg_name}/providers/Microsoft.Network/virtualNetworks/${var.vnet_name}"
@@ -160,7 +160,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
-  name                      = "spoke-to-hub"
+  name                      = var.peering_name_spoke_to_hub
   resource_group_name       = var.rg_name
   virtual_network_name      = var.vnet_name
   remote_virtual_network_id = "/subscriptions/${var.hub_subscription_id}/resourceGroups/${var.hub_rg_name}/providers/Microsoft.Network/virtualNetworks/${var.hub_vnet_name}"
