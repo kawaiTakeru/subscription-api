@@ -2,13 +2,13 @@
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
 project_name   = "BFT"   # <PJ/案件名>
-purpose_name   = "検証"   # <用途>（ASCII に変換: 検証→kensho）
+purpose_name   = "検証"   # <用途>（ASCII へ: 検証→kensho）
 
 # 命名の共通コンテキスト
 environment_id = "prd"   # <環境識別子>
 region         = "japaneast"
 region_code    = "jpe"   # <リージョン略号>
-sequence       = "001"   # <識別番号>（ゼロ埋め推奨）
+sequence       = "001"   # <識別番号>
 
 # ==============================
 # Subscription (Step0)
