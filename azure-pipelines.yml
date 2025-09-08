@@ -49,17 +49,42 @@ stages:
               $val.Trim().Trim('"')
             }
 
+            function To-Slug([string]$s) {
+              if (-not $s) { return "" }
+              $s = $s.ToLowerInvariant()
+              # 非英数字を除去
+              return ($s -replace '[^a-z0-9]', '')
+            }
+
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
+            # 新しい命名用変数を取得
+            $projectName = Get-TfVar $tfvars "project_name"
+            $purposeName = Get-TfVar $tfvars "purpose_name"
+            $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
+            $regionCode  = (Get-TfVar $tfvars "region_code");    if (-not $regionCode) { $regionCode = "jpe" }
+            $seq         = (Get-TfVar $tfvars "sequence");       if (-not $seq) { $seq = "001" }
+
             $createRaw   = Get-TfVar $tfvars "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            Write-Host "Parsed: create_subscription=$createFlag alias=$aliasName existingSpokeId='$spokeIdInTf' hub_subscription_id=$hubSubId"
+            # エイリアス名を命名規則から生成: sub-<proj>-<purpose>-<env>-<region>-<seq>
+            $projSlug   = To-Slug $projectName
+            $purposeSlug = To-Slug $purposeName
+            if (-not $purposeSlug) {
+              # 既知の日本語 -> ASCII フォールバック
+              if ($purposeName -eq "検証") { $purposeSlug = "kensho" }
+            }
+            if (-not $projSlug -or -not $purposeSlug) {
+              throw "project_name/purpose_name cannot be converted to ASCII slug. project='$projectName' purpose='$purposeName'"
+            }
+            $aliasName = "sub-$projSlug-$purposeSlug-$envId-$regionCode-$seq"
+
+            Write-Host "Computed aliasName=$aliasName from project_name='$projectName' purpose_name='$purposeName'"
 
             # 既存 / 新規 判定
             function Get-SubscriptionIdFromAlias([string]$Alias) {
@@ -87,7 +112,6 @@ stages:
             } else {
               # create_subscription=true
               if ($spokeIdInTf) {
-                # create=true かつ spoke_subscription_id も設定 → 仕様上あまり無い想定だが優先順位を明示
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
@@ -97,7 +121,6 @@ stages:
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
                   $finalSubId = $reuseId
                 } else {
-                  if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
                   Write-Host "Creating new subscription via Terraform (targeted alias)."
                   Push-Location $tfDir
                   try {
@@ -324,9 +347,5 @@ stages:
       #       Push-Location "$(Build.SourcesDirectory)/terraform"
       #       try {
       #         terraform init -no-color | Out-Null
-      #         # 状態確認（例）
-      #         $json = terraform show -json | ConvertFrom-Json
-      #         $net = $json.values.root_module.resources | Where-Object { $_.type -eq "azurerm_virtual_network_peering" }
-      #         Write-Host "Peering resources found: " ($net | ForEach-Object { $_.name }) -join ", "
       #         terraform plan -no-color
       #       } finally { Pop-Location }
