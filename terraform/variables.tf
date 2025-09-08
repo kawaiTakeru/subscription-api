@@ -49,6 +49,13 @@ variable "spoke_tenant_id" {
   default     = ""
 }
 
+# 管理グループ（Subscription エイリアス作成時にぶら下げる先）
+variable "management_group_id" {
+  description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
+  type        = string
+  default     = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+}
+
 #############################################
 # Hub 側 (Peering 用)
 #############################################
@@ -68,6 +75,18 @@ variable "hub_vnet_name" {
 variable "hub_rg_name" {
   description = "Hub Resource Group name"
   type        = string
+}
+
+# VNet Peering のリソース名
+variable "peering_name_hub_to_spoke" {
+  description = "Hub 側に作成するピアリング名"
+  type        = string
+  default     = "hub-to-spoke"
+}
+variable "peering_name_spoke_to_hub" {
+  description = "Spoke 側に作成するピアリング名"
+  type        = string
+  default     = "spoke-to-hub"
 }
 
 #############################################
@@ -113,6 +132,19 @@ variable "nsg_name" {
   description = "NSG name"
   type        = string
 }
+
+# NSG ルール名
+variable "nsg_rule_allow_vpn_name" {
+  description = "NSG ルール名 (VPN ポート許可)"
+  type        = string
+  default     = "Allow-VPN-Port"
+}
+variable "nsg_rule_deny_internet_name" {
+  description = "NSG ルール名 (Internet からの Inbound 拒否)"
+  type        = string
+  default     = "Deny-Internet-Inbound"
+}
+
 variable "vpn_client_pool_cidr" {
   description = "VPN クライアントプール CIDR (許可元)"
   type        = string
