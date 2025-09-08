@@ -49,39 +49,21 @@ stages:
               $val.Trim().Trim('"')
             }
 
-            function To-Slug([string]$s) {
-              if (-not $s) { return "" }
-              $s = $s.ToLowerInvariant()
-              return ($s -replace '[^a-z0-9]', '')
+            function Is-Guid([string]$s) {
+              return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # 命名ドライバ
-            $projectName = Get-TfVar $tfvars "project_name"
-            $purposeName = Get-TfVar $tfvars "purpose_name"
-            $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
-            $region      = (Get-TfVar $tfvars "region");         if (-not $region) { $region = "japaneast" }
-            $regionCode  = (Get-TfVar $tfvars "region_code");    if (-not $regionCode) { $regionCode = "jpe" }
-            $seq         = (Get-TfVar $tfvars "sequence");       if (-not $seq) { $seq = "001" }
-
-            $projSlug    = To-Slug $projectName
-            $purposeSlug = To-Slug $purposeName
-            if (-not $purposeSlug -and $purposeName -eq "検証") { $purposeSlug = "kensho" }
-
-            # 空要素を除外して結合（--防止）
-            $parts = @($projSlug, $purposeSlug, $envId, $regionCode, $seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-            $base  = ($parts -join "-")
-            $aliasName = "sub-$base"
-
+            $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
             $createRaw   = Get-TfVar $tfvars "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            Write-Host "Parsed: create_subscription=$createFlag computed_alias=$aliasName existingSpokeId='$spokeIdInTf' hub_subscription_id=$hubSubId"
+            Write-Host "Parsed: create_subscription=$createFlag alias=$aliasName existingSpokeId='$spokeIdInTf' hub_subscription_id=$hubSubId"
 
             # 既存 / 新規 判定
             function Get-SubscriptionIdFromAlias([string]$Alias) {
@@ -118,7 +100,7 @@ stages:
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
                   $finalSubId = $reuseId
                 } else {
-                  if (-not $aliasName) { throw "computed alias is empty; cannot create." }
+                  if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
                   Write-Host "Creating new subscription via Terraform (targeted alias)."
                   Push-Location $tfDir
                   try {
@@ -128,12 +110,20 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # 出力 (output subscription_id 利用) / Fallback: alias 直接参照
-                    $subOut = terraform output -raw subscription_id 2>$null
-                    if ($LASTEXITCODE -ne 0 -or -not $subOut) {
-                      $subOut = Get-SubscriptionIdFromAlias $aliasName
+                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output の JSON をパース）
+                    $subOut = Get-SubscriptionIdFromAlias $aliasName
+                    if (-not (Is-Guid $subOut)) {
+                      $jsonOut = terraform output -no-color -json 2>$null
+                      if ($LASTEXITCODE -eq 0 -and $jsonOut) {
+                        try {
+                          $obj = $jsonOut | ConvertFrom-Json
+                          $maybe = $obj.subscription_id.value
+                          if (Is-Guid $maybe) { $subOut = $maybe }
+                        } catch {}
+                      }
                     }
-                    if (-not $subOut) { throw "Could not resolve subscription id after creation." }
+                    if (-not (Is-Guid $subOut)) { throw "Could not resolve subscription id after creation. alias=$aliasName" }
+
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
@@ -142,12 +132,13 @@ stages:
                     if ($LASTEXITCODE -eq 0) {
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
+                    } else {
+                      Write-Host "Alias resource not found in state (continue)."
                     }
 
-                    $overrideContent = @(
-                      'create_subscription = false'
-                      'spoke_subscription_id = "' + $finalSubId + '"'
-                    )
+                    $overrideContent = @()
+                    $overrideContent += 'create_subscription = false'
+                    $overrideContent += 'spoke_subscription_id = "' + $finalSubId + '"'
                     $overridePath = Join-Path $tfDir "override.auto.tfvars"
                     $overrideContent | Set-Content -Encoding UTF8 $overridePath
                     Write-Host "override.auto.tfvars written with final subscription id."
@@ -158,7 +149,7 @@ stages:
                   # 可視化待ち (ARM)
                   Write-Host "Waiting for subscription visibility (ARM)..."
                   $armOk = $false
-                  for($i=1;$i -le 24;$i++){  # 最大 ~4 分
+                  for($i=1;$i -le 24;$i++){
                     try {
                       az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null
                       $armOk = $true
@@ -169,19 +160,16 @@ stages:
                   }
                   if (-not $armOk) { throw "Subscription not visible in ARM after retries: $finalSubId" }
 
-                  # az account list 反映待ち（短縮＆失敗しても続行）
+                  # az account list 反映待ち
                   Write-Host "Waiting for subscription visibility (az account list)..."
                   $seen = $false
-                  for($i=1;$i -le 10;$i++){  # 最大 ~2.5 分
+                  for($i=1;$i -le 40;$i++){
                     $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
                     if ($hit) { $seen = $true; break }
                     Start-Sleep -Seconds 15
                   }
-                  if (-not $seen) {
-                    Write-Warning "Subscription not listed by 'az account list' after waiting: $finalSubId. Continuing anyway."
-                  } else {
-                    Write-Host "Subscription is now visible in az account list. ID=$finalSubId"
-                  }
+                  if (-not $seen) { throw "Subscription not listed by 'az account list' after waiting: $finalSubId" }
+                  Write-Host "Subscription is now visible. ID=$finalSubId"
                 }
               }
             }
@@ -208,6 +196,12 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+
+            # 取得済みIDの最終バリデーション（念のため）
+            if (-not ("$(finalSpokeSubscriptionId)" -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')) {
+              throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
+            }
+
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
