@@ -52,19 +52,29 @@ stages:
             function To-Slug([string]$s) {
               if (-not $s) { return "" }
               $s = $s.ToLowerInvariant()
-              # 非英数字を除去
               return ($s -replace '[^a-z0-9]', '')
             }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # 新しい命名用変数を取得
+            # 命名ドライバ（.tfvars 冒頭の2変数）
             $projectName = Get-TfVar $tfvars "project_name"
             $purposeName = Get-TfVar $tfvars "purpose_name"
             $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
             $regionCode  = (Get-TfVar $tfvars "region_code");    if (-not $regionCode) { $regionCode = "jpe" }
             $seq         = (Get-TfVar $tfvars "sequence");       if (-not $seq) { $seq = "001" }
+
+            $projSlug    = To-Slug $projectName
+            $purposeSlug = To-Slug $purposeName
+            if (-not $purposeSlug) {
+              if ($purposeName -eq "検証") { $purposeSlug = "kensho" }
+            }
+            if (-not $projSlug -or -not $purposeSlug) {
+              throw "project_name/purpose_name cannot be converted to ASCII slug. project='$projectName' purpose='$purposeName'"
+            }
+            $base      = "$projSlug-$purposeSlug-$envId-$regionCode-$seq"
+            $aliasName = "sub-$base"
 
             $createRaw   = Get-TfVar $tfvars "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
@@ -72,19 +82,7 @@ stages:
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            # エイリアス名を命名規則から生成: sub-<proj>-<purpose>-<env>-<region>-<seq>
-            $projSlug   = To-Slug $projectName
-            $purposeSlug = To-Slug $purposeName
-            if (-not $purposeSlug) {
-              # 既知の日本語 -> ASCII フォールバック
-              if ($purposeName -eq "検証") { $purposeSlug = "kensho" }
-            }
-            if (-not $projSlug -or -not $purposeSlug) {
-              throw "project_name/purpose_name cannot be converted to ASCII slug. project='$projectName' purpose='$purposeName'"
-            }
-            $aliasName = "sub-$projSlug-$purposeSlug-$envId-$regionCode-$seq"
-
-            Write-Host "Computed aliasName=$aliasName from project_name='$projectName' purpose_name='$purposeName'"
+            Write-Host "Parsed: create_subscription=$createFlag computed_alias=$aliasName existingSpokeId='$spokeIdInTf' hub_subscription_id=$hubSubId"
 
             # 既存 / 新規 判定
             function Get-SubscriptionIdFromAlias([string]$Alias) {
@@ -105,17 +103,14 @@ stages:
             $aliasCreatedNew = "false"
 
             if (-not $createFlag) {
-              # 既存利用モード
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
               Write-Host "Using provided existing subscription: $finalSubId"
             } else {
-              # create_subscription=true
               if ($spokeIdInTf) {
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
-                # alias 既存確認
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
@@ -130,10 +125,8 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # 出力 (output subscription_id 利用)
                     $subOut = terraform output -raw subscription_id 2>$null
                     if ($LASTEXITCODE -ne 0 -or -not $subOut) {
-                      # Fallback: alias 直接参照
                       $subOut = Get-SubscriptionIdFromAlias $aliasName
                     }
                     if (-not $subOut) { throw "Could not resolve subscription id after creation." }
@@ -145,13 +138,11 @@ stages:
                     if ($LASTEXITCODE -eq 0) {
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
-                    } else {
-                      Write-Host "Alias resource not found in state (unexpected but continue)."
                     }
-
-                    $overrideContent = @()
-                    $overrideContent += 'create_subscription = false'
-                    $overrideContent += 'spoke_subscription_id = "' + $finalSubId + '"'
+                    $overrideContent = @(
+                      'create_subscription = false'
+                      'spoke_subscription_id = "' + $finalSubId + '"'
+                    )
                     $overridePath = Join-Path $tfDir "override.auto.tfvars"
                     $overrideContent | Set-Content -Encoding UTF8 $overridePath
                     Write-Host "override.auto.tfvars written with final subscription id."
@@ -159,10 +150,10 @@ stages:
                     Pop-Location
                   }
 
-                  # 可視化待ち (ARM)
+                  # 可視化待ち (ARM) 短縮
                   Write-Host "Waiting for subscription visibility (ARM)..."
                   $armOk = $false
-                  for($i=1;$i -le 24;$i++){
+                  for($i=1;$i -le 24;$i++){  # 最大 ~4 分
                     try {
                       az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null
                       $armOk = $true
@@ -173,16 +164,19 @@ stages:
                   }
                   if (-not $armOk) { throw "Subscription not visible in ARM after retries: $finalSubId" }
 
-                  # az account list 反映待ち
+                  # az account list 反映待ち（短縮＆失敗しても続行）
                   Write-Host "Waiting for subscription visibility (az account list)..."
                   $seen = $false
-                  for($i=1;$i -le 40;$i++){
+                  for($i=1;$i -le 10;$i++){  # 最大 ~2.5 分（従来 10 分）
                     $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
                     if ($hit) { $seen = $true; break }
                     Start-Sleep -Seconds 15
                   }
-                  if (-not $seen) { throw "Subscription not listed by 'az account list' after waiting: $finalSubId" }
-                  Write-Host "Subscription is now visible. ID=$finalSubId"
+                  if (-not $seen) {
+                    Write-Warning "Subscription not listed by 'az account list' after waiting: $finalSubId. Continuing anyway."
+                  } else {
+                    Write-Host "Subscription is now visible in az account list. ID=$finalSubId"
+                  }
                 }
               }
             }
@@ -329,23 +323,3 @@ stages:
               terraform apply -no-color -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
-
-      # （任意）検証ステップ - 必要ならコメント解除
-      # - task: AzureCLI@2
-      #   displayName: (Optional) Verify Peering and Plan
-      #   env:
-      #     ARM_USE_AZCLI_AUTH: 'true'
-      #     TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-      #     TF_VAR_create_subscription: false
-      #   inputs:
-      #     azureSubscription: snp-pipeline-api
-      #     scriptType: pscore
-      #     scriptLocation: inlineScript
-      #     inlineScript: |
-      #       $ErrorActionPreference='Stop'
-      #       az account set --subscription "$(finalSpokeSubscriptionId)"
-      #       Push-Location "$(Build.SourcesDirectory)/terraform"
-      #       try {
-      #         terraform init -no-color | Out-Null
-      #         terraform plan -no-color
-      #       } finally { Pop-Location }
