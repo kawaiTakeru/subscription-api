@@ -1,43 +1,45 @@
 #############################################
-# Naming inputs（この2つを変えれば全命名が変わる）
+# Subscription (Stage0 相当)
 #############################################
+# 命名規約用 変数（<識別子>-<PJ>-<用途>-<環境>-<リージョン略>-<通番>）
 variable "project_name" {
   description = "PJ/案件名（例: bft）"
   type        = string
+  default     = ""
 }
-
 variable "purpose_name" {
   description = "用途（例: kensho / 検証 など）"
   type        = string
+  default     = ""
 }
-
 variable "environment_id" {
   description = "環境識別子（例: prd, stg, dev）"
   type        = string
   default     = "prd"
 }
-
-variable "region" {
-  description = "Azure region (例: japaneast)"
-  type        = string
-  default     = "japaneast"
-}
-
 variable "region_code" {
   description = "リージョン略号（例: jpe=japaneast）"
   type        = string
   default     = "jpe"
 }
-
 variable "sequence" {
   description = "識別番号（ゼロ埋め文字列推奨: 001）"
   type        = string
   default     = "001"
 }
 
-#############################################
-# Subscription (Step0)
-#############################################
+# サブスクリプション名（未指定なら自動生成: sub-<base>）
+variable "subscription_alias_name" {
+  description = "内部で使われるサブスクリプションエイリアス名（空なら命名規約で自動生成）"
+  type        = string
+  default     = ""
+}
+variable "subscription_display_name" {
+  description = "ポータル表示名（空なら命名規約で自動生成）"
+  type        = string
+  default     = ""
+}
+
 variable "billing_account_name" {
   description = "課金アカウント名"
   type        = string
@@ -50,7 +52,6 @@ variable "invoice_section_name" {
   description = "請求セクション名"
   type        = string
 }
-
 variable "subscription_workload" {
   description = "Workload 種別 (Production / DevTest)"
   type        = string
@@ -66,16 +67,19 @@ variable "enable_billing_check" {
   type        = bool
   default     = false
 }
+
 variable "spoke_subscription_id" {
-  description = "既存 Spoke Subscription ID（既存利用時）。新規作成時は Step0 後に pipeline から注入"
+  description = "既存 Spoke Subscription ID (既存利用時)。新規作成時は Step0 後に pipeline から注入"
   type        = string
   default     = ""
 }
+
 variable "spoke_tenant_id" {
   description = "Spoke Tenant ID (必要に応じて)"
   type        = string
   default     = ""
 }
+
 variable "management_group_id" {
   description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
   type        = string
@@ -83,10 +87,10 @@ variable "management_group_id" {
 }
 
 #############################################
-# Hub 側 (Peering 用) - 既存参照
+# Hub 側 (Peering 用)
 #############################################
 variable "hub_subscription_id" {
-  description = "Hub Subscription ID（既存参照）"
+  description = "Hub Subscription ID"
   type        = string
 }
 variable "hub_tenant_id" {
@@ -95,16 +99,25 @@ variable "hub_tenant_id" {
   default     = ""
 }
 variable "hub_vnet_name" {
-  description = "Hub VNet name（既存参照）"
+  description = "Hub VNet name"
   type        = string
 }
 variable "hub_rg_name" {
-  description = "Hub Resource Group name（既存参照）"
+  description = "Hub Resource Group name"
   type        = string
 }
 
 #############################################
-# VNet / Subnet / NSG Inputs
+# Resource Group (Stage1)
+#############################################
+variable "region" {
+  description = "Azure region (例: japaneast)"
+  type        = string
+  default     = "japaneast"
+}
+
+#############################################
+# VNet (Stage2)
 #############################################
 variable "ipam_pool_id" {
   description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
@@ -114,6 +127,10 @@ variable "vnet_number_of_ips" {
   description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
   type        = number
 }
+
+#############################################
+# Subnet + NSG (Stage3)
+#############################################
 variable "subnet_number_of_ips" {
   description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
   type        = number
