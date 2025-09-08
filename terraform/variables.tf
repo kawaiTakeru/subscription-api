@@ -2,12 +2,12 @@
 # Naming inputs（この2つを変えれば全命名が変わる）
 #############################################
 variable "project_name" {
-  description = "PJ/案件名（例: BFT）"
+  description = "PJ/案件名（例: bft）"
   type        = string
 }
 
 variable "purpose_name" {
-  description = "用途（例: 検証 / 本番 など）"
+  description = "用途（例: kensho / 検証 など）"
   type        = string
 }
 
