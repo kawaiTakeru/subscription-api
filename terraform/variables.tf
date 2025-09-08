@@ -1,222 +1,129 @@
 #############################################
-# main.tf（2変数命名・二重ハイフン防止）
+# Naming inputs（この2つを変えれば全命名が変わる）
 #############################################
-
-terraform {
-  required_version = ">= 1.5.0"
-  required_providers {
-    azapi = {
-      source  = "azure/azapi"
-      version = "~> 1.15"
-    }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.41"
-    }
-  }
+variable "project_name" {
+  description = "PJ/案件名（例: BFT）"
+  type        = string
 }
 
-provider "azapi" {
-  use_cli = true
-  use_msi = false
+variable "purpose_name" {
+  description = "用途（例: 検証 / 本番 など）"
+  type        = string
 }
 
-provider "azurerm" {
-  alias    = "spoke"
-  features {}
-  subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
-  tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
+variable "environment_id" {
+  description = "環境識別子（例: prd, stg, dev）"
+  type        = string
+  default     = "prd"
 }
 
-provider "azurerm" {
-  alias           = "hub"
-  features        {}
-  subscription_id = var.hub_subscription_id
-  tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
+variable "region" {
+  description = "Azure region (例: japaneast)"
+  type        = string
+  default     = "japaneast"
 }
 
-locals {
-  # 課金スコープ
-  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
-
-  # Subscription 作成要否
-  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
-  effective_spoke_subscription_id = coalesce(
-    var.spoke_subscription_id,
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
-  )
-
-  # スラッグ化（regexall + join）
-  project_slug      = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
-  purpose_slug_base = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
-  purpose_slug      = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
-    var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
-  )
-
-  # 空要素を除外して結合（--防止）
-  base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
-  base       = join("-", local.base_parts)
-
-  # 各リソース名（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<seq>）
-  name_sub_alias   = "sub-${local.base}"
-  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は用途の原文でもOK
-  name_rg          = "rg-${local.base}"
-  name_vnet        = "vnet-${local.base}"
-  name_subnet      = "snet-${local.base}"
-  name_nsg         = "nsg-${local.base}"
-  name_peer        = "peer-${local.base}"
-
-  # NSG ルール名（通番）
-  nsg_rule_allow_name = "nsgr-${local.base}-001"
-  nsg_rule_deny_name  = "nsgr-${local.base}-002"
+variable "region_code" {
+  description = "リージョン略号（例: jpe=japaneast）"
+  type        = string
+  default     = "jpe"
 }
 
-resource "azapi_resource" "subscription" {
-  count     = local.need_create_subscription ? 1 : 0
-  type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
-  parent_id = "/"
-  body = jsonencode({
-    properties = {
-      displayName  = local.name_sub_display
-      billingScope = local.billing_scope
-      workload     = var.subscription_workload
-      additionalProperties = {
-        managementGroupId = var.management_group_id
-      }
-    }
-  })
-  timeouts {
-    create = "30m"
-    read   = "5m"
-    delete = "30m"
-  }
+variable "sequence" {
+  description = "識別番号（ゼロ埋め文字列推奨: 001）"
+  type        = string
+  default     = "001"
 }
 
-data "azapi_resource" "subscription_get" {
-  count     = local.need_create_subscription ? 1 : 0
-  type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
-  parent_id = "/"
-  response_export_values = ["properties.subscriptionId"]
-  depends_on = [azapi_resource.subscription]
+#############################################
+# Subscription (Step0)
+#############################################
+variable "billing_account_name" {
+  description = "課金アカウント名"
+  type        = string
+}
+variable "billing_profile_name" {
+  description = "課金プロファイル名"
+  type        = string
+}
+variable "invoice_section_name" {
+  description = "請求セクション名"
+  type        = string
 }
 
-resource "azurerm_resource_group" "rg" {
-  provider = azurerm.spoke
-  name     = local.name_rg
-  location = var.region
+variable "subscription_workload" {
+  description = "Workload 種別 (Production / DevTest)"
+  type        = string
+  default     = "Production"
+}
+variable "create_subscription" {
+  description = "サブスクリプション(エイリアス)を新規作成するか (spoke_subscription_id 空の場合のみ有効)"
+  type        = bool
+  default     = true
+}
+variable "enable_billing_check" {
+  description = "Billing 読み取りチェック (未使用: 将来拡張用)"
+  type        = bool
+  default     = false
+}
+variable "spoke_subscription_id" {
+  description = "既存 Spoke Subscription ID（既存利用時）。新規作成時は Step0 後に pipeline から注入"
+  type        = string
+  default     = ""
+}
+variable "spoke_tenant_id" {
+  description = "Spoke Tenant ID (必要に応じて)"
+  type        = string
+  default     = ""
+}
+variable "management_group_id" {
+  description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
+  type        = string
+  default     = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 }
 
-resource "azurerm_virtual_network" "vnet" {
-  provider            = azurerm.spoke
-  name                = local.name_vnet
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  ip_address_pool {
-    id                     = var.ipam_pool_id
-    number_of_ip_addresses = var.vnet_number_of_ips
-  }
+#############################################
+# Hub 側 (Peering 用) - 既存参照
+#############################################
+variable "hub_subscription_id" {
+  description = "Hub Subscription ID（既存参照）"
+  type        = string
+}
+variable "hub_tenant_id" {
+  description = "Hub Tenant ID (必要に応じて)"
+  type        = string
+  default     = ""
+}
+variable "hub_vnet_name" {
+  description = "Hub VNet name（既存参照）"
+  type        = string
+}
+variable "hub_rg_name" {
+  description = "Hub Resource Group name（既存参照）"
+  type        = string
 }
 
-resource "azurerm_network_security_group" "subnet_nsg" {
-  provider            = azurerm.spoke
-  name                = local.name_nsg
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  security_rule {
-    name                       = local.nsg_rule_allow_name
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = var.allowed_port
-    source_address_prefix      = var.vpn_client_pool_cidr
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = local.nsg_rule_deny_name
-    priority                   = 200
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "Internet"
-    destination_address_prefix = "*"
-  }
+#############################################
+# VNet / Subnet / NSG Inputs
+#############################################
+variable "ipam_pool_id" {
+  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
+  type        = string
 }
-
-resource "azurerm_subnet" "subnet" {
-  provider             = azurerm.spoke
-  name                 = local.name_subnet
-  resource_group_name  = azurerm_resource_group.rg.name
-  virtual_network_name = azurerm_virtual_network.vnet.name
-
-  ip_address_pool {
-    id                     = var.ipam_pool_id
-    number_of_ip_addresses = var.subnet_number_of_ips
-  }
+variable "vnet_number_of_ips" {
+  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
+  type        = number
 }
-
-resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
-  provider                  = azurerm.spoke
-  subnet_id                 = azurerm_subnet.subnet.id
-  network_security_group_id = azurerm_network_security_group.subnet_nsg.id
+variable "subnet_number_of_ips" {
+  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
+  type        = number
 }
-
-resource "azurerm_virtual_network_peering" "hub_to_spoke" {
-  provider                  = azurerm.hub
-  name                      = local.name_peer
-  resource_group_name       = var.hub_rg_name
-  virtual_network_name      = var.hub_vnet_name
-  remote_virtual_network_id = "/subscriptions/${local.effective_spoke_subscription_id}/resourceGroups/${local.name_rg}/providers/Microsoft.Network/virtualNetworks/${local.name_vnet}"
-
-  allow_forwarded_traffic = true
-  allow_gateway_transit   = true
-  use_remote_gateways     = false
-
-  depends_on = [azurerm_virtual_network.vnet]
+variable "vpn_client_pool_cidr" {
+  description = "VPN クライアントプール CIDR (許可元)"
+  type        = string
 }
-
-resource "azurerm_virtual_network_peering" "spoke_to_hub" {
-  provider                  = azurerm.spoke
-  name                      = local.name_peer
-  resource_group_name       = local.name_rg
-  virtual_network_name      = local.name_vnet
-  remote_virtual_network_id = "/subscriptions/${var.hub_subscription_id}/resourceGroups/${var.hub_rg_name}/providers/Microsoft.Network/virtualNetworks/${var.hub_vnet_name}"
-
-  allow_forwarded_traffic = true
-  allow_gateway_transit   = false
-  use_remote_gateways     = true
-
-  depends_on = [
-    azurerm_virtual_network.vnet,
-    azurerm_virtual_network_peering.hub_to_spoke
-  ]
-}
-
-output "subscription_id" {
-  value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
-  description = "Effective subscription ID"
-}
-
-output "spoke_rg_name" {
-  value = azurerm_resource_group.rg.name
-}
-
-output "spoke_vnet_name" {
-  value = azurerm_virtual_network.vnet.name
-}
-
-output "hub_to_spoke_peering_id" {
-  value = azurerm_virtual_network_peering.hub_to_spoke.id
-}
-
-output "spoke_to_hub_peering_id" {
-  value = azurerm_virtual_network_peering.spoke_to_hub.id
+variable "allowed_port" {
+  description = "許可ポート (RDP=3389 / SSH=22 など)"
+  type        = number
+  default     = 3389
 }
