@@ -1,5 +1,5 @@
 #############################################
-# main.tf
+# main.tf（slug 生成ロジックを regexall+join に変更）
 #############################################
 
 terraform {
@@ -36,37 +36,31 @@ provider "azurerm" {
 }
 
 locals {
-  # Billing scope
   billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
 
-  # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # Slug from project/purpose (ASCII のみ)
-  # regexreplace が使えないため、regexall で許可文字だけ抜き出して join する
-  project_slug       = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
-  purpose_slug_base  = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
-  purpose_slug       = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
+  # Slug 化（regexall で許可文字のみ抽出）
+  project_slug      = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
+  purpose_slug_base = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
+  purpose_slug      = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # 基本名: <proj>-<purpose>-<env>-<region>-<seq>
   base = "${local.project_slug}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}"
 
-  # 各リソース名
   name_sub_alias   = "sub-${local.base}"
-  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は日本語用途可
+  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}"
   name_rg          = "rg-${local.base}"
   name_vnet        = "vnet-${local.base}"
   name_subnet      = "snet-${local.base}"
   name_nsg         = "nsg-${local.base}"
-  name_peer        = "peer-${local.base}"                  # Hub側/Spoke側で同一名でも問題なし（各VNet内で一意）
+  name_peer        = "peer-${local.base}"
 
-  # NSG ルール名（命名規則に従いつつ通番で区別）
   nsg_rule_allow_name = "nsgr-${local.base}-001"
   nsg_rule_deny_name  = "nsgr-${local.base}-002"
 }
@@ -81,8 +75,6 @@ resource "azapi_resource" "subscription" {
       displayName  = local.name_sub_display
       billingScope = local.billing_scope
       workload     = var.subscription_workload
-
-      # 管理グループ配下に作成（変数化）
       additionalProperties = {
         managementGroupId = var.management_group_id
       }
