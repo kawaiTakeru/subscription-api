@@ -68,7 +68,7 @@ stages:
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            # alias 未指定なら命名規約から自動生成: sub-<PJ>-<用途>-<環境>-<リージョン略>-<通番>
+            # 命名規則: sub-<PJ>-<用途>-<環境>-<リージョン略>-<通番>
             if (-not $aliasName) {
               $projectName = Get-TfVar $tfvars "project_name"
               $purposeName = Get-TfVar $tfvars "purpose_name"
@@ -91,6 +91,7 @@ stages:
               if (-not $Alias) { return "" }
               foreach ($cmd in @(
                 { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
+                { az rest --method get --url "https://management.azure.com/providers/Microsoft.Subscription/aliases/$Alias?api-version=2021-10-01" --query "properties.subscriptionId" -o tsv 2>$null },
                 { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
               )) {
                 try {
@@ -105,14 +106,17 @@ stages:
             $aliasCreatedNew = "false"
 
             if (-not $createFlag) {
+              # 既存利用モード
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
               Write-Host "Using provided existing subscription: $finalSubId"
             } else {
+              # create_subscription=true
               if ($spokeIdInTf) {
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
+                # alias 既存確認
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
@@ -125,25 +129,38 @@ stages:
                     terraform init -no-color
                     if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
 
+                    # まず作成を試行
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
-                    if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
+                    if ($LASTEXITCODE -ne 0) {
+                      # 失敗しても alias が既に存在していれば再利用して続行（"Resource already exists" 等を吸収）
+                      Write-Warning "Terraform targeted apply failed. Checking if alias exists to continue..."
+                      $reuseAfter = Get-SubscriptionIdFromAlias $aliasName
+                      if ($reuseAfter) {
+                        Write-Warning "Alias exists after failed apply. Reusing subscriptionId=$reuseAfter"
+                        $finalSubId = $reuseAfter.Trim()
+                        $aliasCreatedNew = "false"
+                      } else {
+                        throw "terraform apply (alias target) failed and alias not found."
+                      }
+                    }
 
-                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output(JSON) をパース）
-                    $subOut = Get-SubscriptionIdFromAlias $aliasName
-                    if (-not (Is-Guid $subOut)) {
+                    if (-not $finalSubId) {
+                      # 正常作成ケース: 出力または alias 見直し
                       $jsonOut = terraform output -no-color -json 2>$null
                       if ($LASTEXITCODE -eq 0 -and $jsonOut) {
                         try {
                           $obj = $jsonOut | ConvertFrom-Json
                           $maybe = $obj.subscription_id.value
-                          if (Is-Guid $maybe) { $subOut = $maybe }
+                          if ($maybe) { $finalSubId = $maybe.Trim() }
                         } catch {}
                       }
+                      if (-not $finalSubId) {
+                        $fallback = Get-SubscriptionIdFromAlias $aliasName
+                        if ($fallback) { $finalSubId = $fallback.Trim() }
+                      }
+                      if (-not $finalSubId) { throw "Could not resolve subscription id after creation." }
+                      $aliasCreatedNew = "true"
                     }
-                    if (-not (Is-Guid $subOut)) { throw "Could not resolve subscription id after creation. alias=$aliasName" }
-
-                    $finalSubId = $subOut.Trim()
-                    $aliasCreatedNew = "true"
 
                     # state から alias を除去 & override.auto.tfvars 生成
                     terraform state show azapi_resource.subscription[0] 1>$null 2>$null
