@@ -29,7 +29,7 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -52,6 +52,9 @@ stages:
               if (-not $s) { return "" }
               $s = $s.ToLowerInvariant()
               return ($s -replace '[^a-z0-9]', '')
+            }
+            function Is-Guid([string]$s) {
+              return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
@@ -125,12 +128,20 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # 出力 (output subscription_id 利用) / Fallback: alias 直接参照
-                    $subOut = terraform output -raw subscription_id 2>$null
-                    if ($LASTEXITCODE -ne 0 -or -not $subOut) {
-                      $subOut = Get-SubscriptionIdFromAlias $aliasName
+                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output(JSON) をパース）
+                    $subOut = Get-SubscriptionIdFromAlias $aliasName
+                    if (-not (Is-Guid $subOut)) {
+                      $jsonOut = terraform output -no-color -json 2>$null
+                      if ($LASTEXITCODE -eq 0 -and $jsonOut) {
+                        try {
+                          $obj = $jsonOut | ConvertFrom-Json
+                          $maybe = $obj.subscription_id.value
+                          if (Is-Guid $maybe) { $subOut = $maybe }
+                        } catch {}
+                      }
                     }
-                    if (-not $subOut) { throw "Could not resolve subscription id after creation." }
+                    if (-not (Is-Guid $subOut)) { throw "Could not resolve subscription id after creation. alias=$aliasName" }
+
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
@@ -140,7 +151,7 @@ stages:
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
                     } else {
-                      Write-Host "Alias resource not found in state (unexpected but continue)."
+                      Write-Host "Alias resource not found in state (continue)."
                     }
 
                     $overrideContent = @()
@@ -198,11 +209,17 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+
+            # 取得済みIDの最終バリデーション（念のため）
+            if (-not ("$(finalSpokeSubscriptionId)" -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')) {
+              throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
+            }
+
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
@@ -227,7 +244,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -256,7 +273,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -288,7 +305,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -311,7 +328,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -332,7 +349,7 @@ stages:
       #     TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
       #     TF_VAR_create_subscription: false
       #   inputs:
-      #     azureSubscription: snp-pipeline-api
+      #     azureSubscription: snp-pipeline-api-wif
       #     scriptType: pscore
       #     scriptLocation: inlineScript
       #     inlineScript: |
