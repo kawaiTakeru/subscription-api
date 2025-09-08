@@ -1,5 +1,7 @@
 #############################################
 # main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+# CAF略語:
+# - rg, vnet, snet, nsg, sr(=security rule), vnetpeer, sub(エイリアス)
 #############################################
 
 terraform {
@@ -58,17 +60,16 @@ locals {
   base       = join("-", local.base_parts)
 
   # 各リソース名（命名規約準拠）
-  name_sub_alias   = "sub-${local.base}"
-  name_sub_display = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は原文用途でもOK
-  name_rg          = "rg-${local.base}"
-  name_vnet        = "vnet-${local.base}"
-  name_subnet      = "snet-${local.base}"
-  name_nsg         = "nsg-${local.base}"
-  name_peer        = "peer-${local.base}"
-
-  # NSG ルール名（通番）
-  nsg_rule_allow_name = "nsgr-${local.base}-001"
-  nsg_rule_deny_name  = "nsgr-${local.base}-002"
+  name_sub_alias            = "sub-${local.base}"
+  name_sub_display          = "sub-${var.purpose_name}-${var.environment_id}-${var.region_code}-${var.sequence}" # 表示名は原文用途でもOK
+  name_rg                   = "rg-${local.base}"
+  name_vnet                 = "vnet-${local.base}"
+  name_subnet               = "snet-${local.base}"
+  name_nsg                  = "nsg-${local.base}"
+  name_sr_allow             = "sr-${local.base}-001"
+  name_sr_deny_internet_in  = "sr-${local.base}-002"
+  name_vnetpeer_hub2spoke   = "vnetpeerhub2spoke-${local.base}"
+  name_vnetpeer_spoke2hub   = "vnetpeerspoke2hub-${local.base}"
 }
 
 # Subscription Alias（必要時のみ）
@@ -131,7 +132,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   resource_group_name = azurerm_resource_group.rg.name
 
   security_rule {
-    name                       = local.nsg_rule_allow_name
+    name                       = local.name_sr_allow
     priority                   = 100
     direction                  = "Inbound"
     access                     = "Allow"
@@ -143,7 +144,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 
   security_rule {
-    name                       = local.nsg_rule_deny_name
+    name                       = local.name_sr_deny_internet_in
     priority                   = 200
     direction                  = "Inbound"
     access                     = "Deny"
@@ -178,7 +179,7 @@ resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
 # Peering Hub -> Spoke
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
-  name                      = local.name_peer
+  name                      = local.name_vnetpeer_hub2spoke
   resource_group_name       = var.hub_rg_name
   virtual_network_name      = var.hub_vnet_name
   remote_virtual_network_id = "/subscriptions/${local.effective_spoke_subscription_id}/resourceGroups/${local.name_rg}/providers/Microsoft.Network/virtualNetworks/${local.name_vnet}"
@@ -193,7 +194,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 # Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
-  name                      = local.name_peer
+  name                      = local.name_vnetpeer_spoke2hub
   resource_group_name       = local.name_rg
   virtual_network_name      = local.name_vnet
   remote_virtual_network_id = "/subscriptions/${var.hub_subscription_id}/resourceGroups/${var.hub_rg_name}/providers/Microsoft.Network/virtualNetworks/${var.hub_vnet_name}"
