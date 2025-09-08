@@ -19,10 +19,11 @@ invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
 # 既存サブスクリプションを再利用する場合（例）
-create_subscription   = false
-spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
+#create_subscription   = false
+#spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
 
 # 新規作成したい場合は上記2行をコメントアウトし、create_subscription = true に変更
+create_subscription = true
 
 management_group_id   = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
