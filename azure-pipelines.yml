@@ -29,7 +29,7 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -48,20 +48,38 @@ stages:
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
             }
-
-            function Is-Guid([string]$s) {
-              return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            function To-Slug([string]$s) {
+              if (-not $s) { return "" }
+              $s = $s.ToLowerInvariant()
+              return ($s -replace '[^a-z0-9]', '')
             }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
+            # まず tfvars から既存値を読む
             $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
             $createRaw   = Get-TfVar $tfvars "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
+
+            # alias 未指定なら命名規約から自動生成: sub-<PJ>-<用途>-<環境>-<リージョン略>-<通番>
+            if (-not $aliasName) {
+              $projectName = Get-TfVar $tfvars "project_name"
+              $purposeName = Get-TfVar $tfvars "purpose_name"
+              $envId       = (Get-TfVar $tfvars "environment_id"); if (-not $envId) { $envId = "prd" }
+              $regionCode  = (Get-TfVar $tfvars "region_code");    if (-not $regionCode) { $regionCode = "jpe" }
+              $seq         = (Get-TfVar $tfvars "sequence");       if (-not $seq) { $seq = "001" }
+
+              $projSlug    = To-Slug $projectName
+              $purposeSlug = To-Slug $purposeName
+              if (-not $purposeSlug -and $purposeName -eq "検証") { $purposeSlug = "kensho" }
+
+              $parts = @($projSlug, $purposeSlug, $envId, $regionCode, $seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+              if ($parts.Count -gt 0) { $aliasName = "sub-" + ($parts -join "-") }
+            }
 
             Write-Host "Parsed: create_subscription=$createFlag alias=$aliasName existingSpokeId='$spokeIdInTf' hub_subscription_id=$hubSubId"
 
@@ -84,23 +102,20 @@ stages:
             $aliasCreatedNew = "false"
 
             if (-not $createFlag) {
-              # 既存利用モード
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
               Write-Host "Using provided existing subscription: $finalSubId"
             } else {
-              # create_subscription=true
               if ($spokeIdInTf) {
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
-                # alias 既存確認
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   Write-Host "Alias already exists. Reuse subscriptionId=$reuseId"
                   $finalSubId = $reuseId
                 } else {
-                  if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
+                  if (-not $aliasName) { throw "subscription_alias_name is empty and could not be computed; cannot create." }
                   Write-Host "Creating new subscription via Terraform (targeted alias)."
                   Push-Location $tfDir
                   try {
@@ -110,20 +125,12 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # 新規作成直後の ID 解決（まず az から、ダメなら terraform output(JSON) をパース）
-                    $subOut = Get-SubscriptionIdFromAlias $aliasName
-                    if (-not (Is-Guid $subOut)) {
-                      $jsonOut = terraform output -no-color -json 2>$null
-                      if ($LASTEXITCODE -eq 0 -and $jsonOut) {
-                        try {
-                          $obj = $jsonOut | ConvertFrom-Json
-                          $maybe = $obj.subscription_id.value
-                          if (Is-Guid $maybe) { $subOut = $maybe }
-                        } catch {}
-                      }
+                    # 出力 (output subscription_id 利用) / Fallback: alias 直接参照
+                    $subOut = terraform output -raw subscription_id 2>$null
+                    if ($LASTEXITCODE -ne 0 -or -not $subOut) {
+                      $subOut = Get-SubscriptionIdFromAlias $aliasName
                     }
-                    if (-not (Is-Guid $subOut)) { throw "Could not resolve subscription id after creation. alias=$aliasName" }
-
+                    if (-not $subOut) { throw "Could not resolve subscription id after creation." }
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
@@ -133,7 +140,7 @@ stages:
                       Write-Host "Removing alias resource from state to prevent destroy in later full applies."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
                     } else {
-                      Write-Host "Alias resource not found in state (continue)."
+                      Write-Host "Alias resource not found in state (unexpected but continue)."
                     }
 
                     $overrideContent = @()
@@ -191,17 +198,11 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-
-            # 取得済みIDの最終バリデーション（念のため）
-            if (-not ("$(finalSpokeSubscriptionId)" -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')) {
-              throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
-            }
-
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
@@ -226,7 +227,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -255,7 +256,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -287,7 +288,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -310,7 +311,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api-wif
+          azureSubscription: snp-pipeline-api
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -331,7 +332,7 @@ stages:
       #     TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
       #     TF_VAR_create_subscription: false
       #   inputs:
-      #     azureSubscription: snp-pipeline-api-wif
+      #     azureSubscription: snp-pipeline-api
       #     scriptType: pscore
       #     scriptLocation: inlineScript
       #     inlineScript: |
