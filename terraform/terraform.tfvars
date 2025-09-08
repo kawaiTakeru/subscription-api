@@ -1,8 +1,8 @@
 # ===========================================
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
-project_name   = "BFT"   # <PJ/案件名>
-purpose_name   = "検証"   # <用途>（ASCII にスラッグ化: 検証→kensho）
+project_name = "bft"     # <PJ/案件名>
+purpose_name = "kensho"  # <用途>（日本語なら後段でスラッグ化: 検証→kensho）
 
 # 命名の共通コンテキスト
 environment_id = "prd"   # <環境識別子>
@@ -17,13 +17,14 @@ billing_account_name  = "0ae846b2-3157-5400-bf84-d255f8f82239:d68ce096-f337-4c84
 billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
-# 新規サブスクリプション
-# create_subscription   = true
-# 既存サブスクリプション再利用の場合は以下を設定
-create_subscription   = false
-spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
 
-management_group_id   = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+# 新規作成する場合
+#create_subscription = true
+# 既存サブスクリプションを使う場合は以下にIDを入れて create_subscription=false にする
+ create_subscription   = false
+ spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
+
+management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
 # ==============================
 # VNet / Subnet / NSG (Step1-3)
@@ -35,9 +36,8 @@ vpn_client_pool_cidr = "172.16.201.0/24"
 allowed_port         = 3389
 
 # ==============================
-# Hub Peering (Step4)
+# Hub Peering (Step4) - 既存参照（作成しません）
 # ==============================
-# 既存の Hub リソース（参照のみ。新規作成はしません）
 hub_subscription_id = "7d1f78e5-bc6c-4018-847f-336ff47b9436"   # 既存 Hub Subscription ID
 hub_vnet_name       = "vnet-test-hubnw-prd-jpe-001"           # 既存 Hub VNet 名
 hub_rg_name         = "rg-test-hubnw-prd-jpe-001"             # 既存 Hub RG 名
