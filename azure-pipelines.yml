@@ -29,7 +29,7 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -198,7 +198,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -227,7 +227,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -256,7 +256,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -288,7 +288,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
@@ -311,7 +311,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
         inputs:
-          azureSubscription: snp-pipeline-api
+          azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
