@@ -2,7 +2,7 @@
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
 project_name = "bft"     # <PJ/案件名>
-purpose_name = "kensho"  # <用途>
+purpose_name = "kensho1"  # <用途>
 
 # 命名の共通コンテキスト
 environment_id = "prd"   # <環境識別子>
