@@ -1,14 +1,14 @@
 # ===========================================
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
-project_name = "bft"     # <PJ/案件名>
+project_name = "bft"      # <PJ/案件名>
 purpose_name = "kensho1"  # <用途>
 
 # 命名の共通コンテキスト
-environment_id = "prd"   # <環境識別子>
+environment_id = "prd"    # <環境識別子>
 region         = "japaneast"
-region_code    = "jpe"   # <リージョン略号>
-sequence       = "001"   # <識別番号>
+region_code    = "jpe"    # <リージョン略号>
+sequence       = "001"    # <識別番号>
 
 # ==============================
 # Subscription (Step0)
@@ -19,13 +19,13 @@ invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
 # 既存サブスクリプションを再利用する場合（例）
-#create_subscription   = false
-#spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
+# create_subscription   = false
+# spoke_subscription_id = "8c17f519-5284-425d-8802-8a0d29735e09"
 
-# 新規作成したい場合は上記2行をコメントアウトし、create_subscription = true に変更
-create_subscription = true 
+# 新規作成したい場合
+create_subscription = true
 
-management_group_id   = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
 # ==============================
 # VNet / Subnet / NSG (Step1-3)
