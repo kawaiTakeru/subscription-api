@@ -1,14 +1,14 @@
 # ===========================================
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
-project_name = "bft2"      # <PJ/案件名>
-purpose_name = "kensho2"   # <用途>
+project_name = "bft2"
+purpose_name = "kensho2"
 
 # 命名の共通コンテキスト
-environment_id = "prd"     # <環境識別子>
+environment_id = "prd"
 region         = "japaneast"
-region_code    = "jpe"     # <リージョン略号>
-sequence       = "001"     # <識別番号>
+region_code    = "jpe"
+sequence       = "001"
 
 # ==============================
 # Subscription (Step0)
@@ -18,10 +18,11 @@ billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
-# 新規作成（今回はこちら）
-#create_subscription   = true
-# 既存再利用する場合は上を false にし、ID を指定
- spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
+# 今回は新規作成
+create_subscription   = true
+# 既存再利用する場合はこちらを使う
+# create_subscription   = false
+# spoke_subscription_id = "<existing-guid>"
 
 management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
@@ -29,8 +30,8 @@ management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-t
 # VNet / Subnet / NSG (Step1-3)
 # ==============================
 ipam_pool_id         = "/subscriptions/6a018b75-55b5-4b68-960d-7328148568aa/resourceGroups/rg-apim-dev/providers/Microsoft.Network/networkManagers/nm-apimdev-ipam/ipamPools/root-10-20"
-vnet_number_of_ips   = 1024  # /22 相当
-subnet_number_of_ips = 256   # /24 相当
+vnet_number_of_ips   = 1024
+subnet_number_of_ips = 256
 vpn_client_pool_cidr = "172.16.201.0/24"
 allowed_port         = 3389
 
