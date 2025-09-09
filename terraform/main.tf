@@ -209,6 +209,14 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
+# Debug outputs (命名確認)
+output "base_naming" {
+  value       = local.base
+  description = "命名の基底（bft1-kensho1-prd-jpe-001 など）"
+}
+output "rg_expected_name"   { value = local.name_rg }
+output "vnet_expected_name" { value = local.name_vnet }
+
 output "subscription_id" {
   value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
   description = "Effective subscription ID"
