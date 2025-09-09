@@ -7,7 +7,7 @@ pool:
 variables:
   - name: System.Debug
     value: false
-  # 初回はフル適用で state/outputs を確実に更新
+  # 初回はフル適用推奨（state/outputs を確実に反映）
   - name: USE_TARGETED_APPLY
     value: false
 
@@ -90,14 +90,11 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
-            # 影響しうる TF_VAR_* を明示的に解除（空の環境変数で上書きされるのを防止）
+            # 命名を上書きしうる要因を除去
             "TF_VAR_project_name","TF_VAR_purpose_name","TF_VAR_environment_id","TF_VAR_region_code","TF_VAR_sequence" |
               ForEach-Object { if (Test-Path env:$_) { Remove-Item env:$_ -ErrorAction SilentlyContinue } }
-
-            # 全 *.auto.tfvars を削除（過去実行の残骸で上書きされるのを防止）
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
-            # デバッグ: tfvars の中身を出力（project/purpose が見えること）
             Write-Host "----- terraform.tfvars (begin) -----"
             Get-Content $varFile | Write-Host
             Write-Host "----- terraform.tfvars (end) -----"
@@ -108,9 +105,11 @@ stages:
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
-              # 命名確認（Terraform が見ている値を出力）
+              # 命名確認
               terraform output -no-color debug_project_name
               terraform output -no-color debug_purpose_name
+              terraform output -no-color debug_project_slug
+              terraform output -no-color debug_purpose_slug
               terraform output -no-color base_naming
               terraform output -no-color rg_expected_name
               terraform output -no-color spoke_rg_name
@@ -135,7 +134,6 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
-            # 念のため残骸ファイルを除去
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
