@@ -18,12 +18,10 @@ billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
-# 既存サブスクリプションを再利用する場合（このまま利用）
-#create_subscription   = false
-#spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
-
-# 新規作成したい場合（使う時だけコメント解除）
- create_subscription = true
+# 新規作成（今回はこちら）
+create_subscription   = true
+# 既存再利用する場合は上を false にし、ID を指定
+# spoke_subscription_id = "<existing-subscription-guid>"
 
 management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
