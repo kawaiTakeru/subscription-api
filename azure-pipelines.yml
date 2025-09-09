@@ -92,6 +92,14 @@ stages:
               ForEach-Object { if (Test-Path env:$_) { Remove-Item env:$_ -ErrorAction SilentlyContinue } }
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+            # Terraform 実体の明示指定（Installer 配置バイナリを使用）
+            $tfExe = Join-Path $env:AGENT_TOOLSDIRECTORY "terraform\1.7.5\x64\terraform.exe"
+            if (-not (Test-Path $tfExe)) {
+              $tfExe = (Get-Command terraform -ErrorAction Stop).Source
+            }
+            Write-Host "Using Terraform: $tfExe"
+            & $tfExe -version
+
             # デバッグ: tfvars の中身
             Write-Host "----- terraform.tfvars (begin) -----"
             Get-Content $varFile | Write-Host
@@ -99,19 +107,19 @@ stages:
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              & $tfExe init -no-color
+              & $tfExe apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
               # 命名確認（Terraform が見ている値を出力）
-              terraform output -no-color debug_project_name
-              terraform output -no-color debug_purpose_name
-              terraform output -no-color debug_project_slug
-              terraform output -no-color debug_purpose_slug
-              terraform output -no-color debug_base_parts
-              terraform output -no-color base_naming
-              terraform output -no-color rg_expected_name
-              terraform output -no-color spoke_rg_name
+              & $tfExe output -no-color debug_project_name
+              & $tfExe output -no-color debug_purpose_name
+              & $tfExe output -no-color debug_project_slug
+              & $tfExe output -no-color debug_purpose_slug
+              & $tfExe output -no-color debug_base_parts
+              & $tfExe output -no-color base_naming
+              & $tfExe output -no-color rg_expected_name
+              & $tfExe output -no-color spoke_rg_name
             } finally { Pop-Location }
 
       # Step2: VNet
@@ -133,15 +141,23 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
+            # Terraform 実体の明示指定
+            $tfExe = Join-Path $env:AGENT_TOOLSDIRECTORY "terraform\1.7.5\x64\terraform.exe"
+            if (-not (Test-Path $tfExe)) {
+              $tfExe = (Get-Command terraform -ErrorAction Stop).Source
+            }
+            Write-Host "Using Terraform: $tfExe"
+            & $tfExe -version
+
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              & $tfExe init -no-color
+              & $tfExe apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (VNet)" }
 
-              terraform output -no-color vnet_expected_name
+              & $tfExe output -no-color vnet_expected_name
             } finally { Pop-Location }
 
       # Step3: Subnet + NSG
@@ -163,12 +179,20 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
+            # Terraform 実体の明示指定
+            $tfExe = Join-Path $env:AGENT_TOOLSDIRECTORY "terraform\1.7.5\x64\terraform.exe"
+            if (-not (Test-Path $tfExe)) {
+              $tfExe = (Get-Command terraform -ErrorAction Stop).Source
+            }
+            Write-Host "Using Terraform: $tfExe"
+            & $tfExe -version
+
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              & $tfExe init -no-color
+              & $tfExe apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Subnet/NSG)" }
             } finally { Pop-Location }
 
@@ -201,12 +225,20 @@ stages:
             if (-not $hubSubId) { throw "hub_subscription_id not found in tfvars" }
             az account set --subscription $hubSubId
 
+            # Terraform 実体の明示指定
+            $tfExe = Join-Path $env:AGENT_TOOLSDIRECTORY "terraform\1.7.5\x64\terraform.exe"
+            if (-not (Test-Path $tfExe)) {
+              $tfExe = (Get-Command terraform -ErrorAction Stop).Source
+            }
+            Write-Host "Using Terraform: $tfExe"
+            & $tfExe -version
+
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              & $tfExe init -no-color
+              & $tfExe apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Hub->Spoke)" }
             } finally { Pop-Location }
 
@@ -229,11 +261,19 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
+            # Terraform 実体の明示指定
+            $tfExe = Join-Path $env:AGENT_TOOLSDIRECTORY "terraform\1.7.5\x64\terraform.exe"
+            if (-not (Test-Path $tfExe)) {
+              $tfExe = (Get-Command terraform -ErrorAction Stop).Source
+            }
+            Write-Host "Using Terraform: $tfExe"
+            & $tfExe -version
+
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              & $tfExe init -no-color
+              & $tfExe apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Spoke->Hub)" }
             } finally { Pop-Location }
