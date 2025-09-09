@@ -4,6 +4,10 @@
 
 terraform {
   required_version = ">= 1.5.0"
+
+  # 追加: Remote Backend（詳細値は init 時に -backend-config で注入）
+  backend "azurerm" {}
+
   required_providers {
     azapi = {
       source  = "azure/azapi"
@@ -48,7 +52,6 @@ locals {
   purpose_raw = trimspace(var.purpose_name)
 
   # スラッグ化（regex を使わない単純置換 + 小文字化）
-  # 入力は英数字想定。必要最低限の安全化のみ行う。
   project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
   purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
