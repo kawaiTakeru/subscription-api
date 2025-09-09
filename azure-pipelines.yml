@@ -36,7 +36,9 @@ stages:
             $ErrorActionPreference='Stop'
 
             $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
             Write-Host "Terraform dir: $tfDir"
+            Write-Host "Using var-file: $varFile"
 
             # --- helpers ---
             function Get-TfVar {
@@ -74,7 +76,7 @@ stages:
             # ensure extension (念のため)
             az extension show -n account 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { az extension add -n account | Out-Null }
 
-            $tfvars = Join-Path $tfDir "terraform.tfvars"
+            $tfvars = $varFile
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
             # read inputs
@@ -136,9 +138,9 @@ stages:
                     ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
 
                     if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                      terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
+                      terraform apply -no-color -auto-approve -var-file="$varFile" -target azapi_resource.subscription[0]
                     } else {
-                      terraform apply -no-color -auto-approve
+                      terraform apply -no-color -auto-approve -var-file="$varFile"
                     }
 
                     if ($LASTEXITCODE -ne 0) {
@@ -244,17 +246,19 @@ stages:
               throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
             }
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Push-Location $tfDir
             try {
               terraform init -no-color
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_resource_group.rg
+                terraform apply -no-color -auto-approve -var-file="$varFile" -target azurerm_resource_group.rg
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -auto-approve -var-file="$varFile"
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -auto-approve -var-file="$varFile"
               }
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
@@ -273,17 +277,19 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Push-Location $tfDir
             try {
               terraform init -no-color
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_virtual_network.vnet
+                terraform apply -no-color -auto-approve -var-file="$varFile" -target azurerm_virtual_network.vnet
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -auto-approve -var-file="$varFile"
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -auto-approve -var-file="$varFile"
               }
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
@@ -302,20 +308,23 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Push-Location $tfDir
             try {
               terraform init -no-color
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -auto-approve `
+                  -var-file="$varFile" `
                   -target azurerm_network_security_group.subnet_nsg `
                   -target azurerm_subnet.subnet `
                   -target azurerm_subnet_network_security_group_association.subnet_assoc
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -auto-approve -var-file="$varFile"
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -auto-approve -var-file="$varFile"
               }
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
@@ -336,10 +345,12 @@ stages:
             $hubSub = "$(hubSubscriptionId)"
             if (-not $hubSub) { throw "hubSubscriptionId variable not set" }
             az account set --subscription $hubSub
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Push-Location $tfDir
             try {
               terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
@@ -357,10 +368,12 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Push-Location $tfDir
             try {
               terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
 
@@ -378,8 +391,10 @@ stages:
       #     inlineScript: |
       #       $ErrorActionPreference='Stop'
       #       az account set --subscription "$(finalSpokeSubscriptionId)"
-      #       Push-Location "$(Build.SourcesDirectory)/terraform"
+      #       $tfDir = "$(Build.SourcesDirectory)/terraform"
+      #       $varFile = Join-Path $tfDir "terraform.tfvars"
+      #       Push-Location $tfDir
       #       try {
       #         terraform init -no-color | Out-Null
-      #         terraform plan -no-color
+      #         terraform plan -no-color -var-file="$varFile"
       #       } finally { Pop-Location }
