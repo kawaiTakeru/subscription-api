@@ -1,46 +1,32 @@
 #############################################
 # main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
-# CAF略語:
-# - sub(=subscription alias), rg, vnet, snet, nsg, sr(=security rule), vnetpeer
 #############################################
 
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
-    azapi = {
-      source  = "azure/azapi"
-      version = "~> 1.15"
-    }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.41"
-    }
+    azapi  = { source = "azure/azapi",     version = "~> 1.15" }
+    azurerm = { source = "hashicorp/azurerm", version = "~> 4.41" }
   }
 }
 
-provider "azapi" {
-  use_cli = true
-  use_msi = false
+provider "azapi" { use_cli = true, use_msi = false }
+
+provider "azurerm" {
+  alias            = "spoke"
+  features         {}
+  subscription_id  = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
+  tenant_id        = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
-  alias    = "spoke"
-  features {}
-  subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
-  tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
-}
-
-provider "azurerm" {
-  alias           = "hub"
-  features        {}
-  subscription_id = var.hub_subscription_id
-  tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
+  alias            = "hub"
+  features         {}
+  subscription_id  = var.hub_subscription_id
+  tenant_id        = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
 locals {
-  # Billing scope
-  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
-
   # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
@@ -81,18 +67,11 @@ resource "azapi_resource" "subscription" {
   body = jsonencode({
     properties = {
       displayName  = local.name_sub_display
-      billingScope = local.billing_scope
       workload     = var.subscription_workload
-      additionalProperties = {
-        managementGroupId = var.management_group_id
-      }
+      additionalProperties = { managementGroupId = var.management_group_id }
     }
   })
-  timeouts {
-    create = "30m"
-    read   = "5m"
-    delete = "30m"
-  }
+  timeouts { create = "30m", read = "5m", delete = "30m" }
 }
 
 data "azapi_resource" "subscription_get" {
@@ -209,31 +188,13 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# Debug outputs (命名確認)
-output "base_naming" {
-  value       = local.base
-  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
-}
-output "rg_expected_name"   { value = local.name_rg }
-output "vnet_expected_name" { value = local.name_vnet }
+# Debug outputs（命名確認）
+output "base_naming"       { value = local.base }
+output "rg_expected_name"  { value = local.name_rg }
+output "vnet_expected_name"{ value = local.name_vnet }
 
-output "subscription_id" {
-  value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
-  description = "Effective subscription ID"
-}
-
-output "spoke_rg_name" {
-  value = azurerm_resource_group.rg.name
-}
-
-output "spoke_vnet_name" {
-  value = azurerm_virtual_network.vnet.name
-}
-
-output "hub_to_spoke_peering_id" {
-  value = azurerm_virtual_network_peering.hub_to_spoke.id
-}
-
-output "spoke_to_hub_peering_id" {
-  value = azurerm_virtual_network_peering.spoke_to_hub.id
-}
+output "subscription_id"   { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"     { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"   { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
