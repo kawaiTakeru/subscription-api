@@ -1,8 +1,8 @@
 # ===========================================
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
-project_name = "bft1"      # <PJ/案件名>
-purpose_name = "kensho1"   # <用途>
+project_name = "bft2"      # <PJ/案件名>
+purpose_name = "kensho2"   # <用途>
 
 # 命名の共通コンテキスト
 environment_id = "prd"     # <環境識別子>
@@ -19,11 +19,11 @@ invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
 # 既存サブスクリプションを再利用する場合（このまま利用）
-create_subscription   = false
-spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
+#create_subscription   = false
+#spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
 
 # 新規作成したい場合（使う時だけコメント解除）
-# create_subscription = true
+ create_subscription = true
 
 management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
