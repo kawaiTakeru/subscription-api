@@ -6,11 +6,19 @@ variable "project_name" {
   description = "PJ/案件名（例: bft）"
   type        = string
   default     = ""
+  validation {
+    condition     = length(trim(var.project_name)) > 0
+    error_message = "project_name は必須です。例: bft1"
+  }
 }
 variable "purpose_name" {
   description = "用途（例: kensho / 検証 など）"
   type        = string
   default     = ""
+  validation {
+    condition     = length(trim(var.purpose_name)) > 0
+    error_message = "purpose_name は必須です。例: kensho1"
+  }
 }
 variable "environment_id" {
   description = "環境識別子（例: prd, stg, dev）"
