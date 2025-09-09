@@ -35,10 +35,10 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
 
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Write-Host "Terraform dir: $tfDir"
-            Write-Host "Using var-file: $varFile"
+            Write-Host "Using var-file : $varFile"
 
             # --- helpers ---
             function Get-TfVar {
@@ -246,7 +246,7 @@ stages:
               throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
             }
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Push-Location $tfDir
             try {
@@ -277,7 +277,7 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Push-Location $tfDir
             try {
@@ -308,7 +308,7 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Push-Location $tfDir
             try {
@@ -345,7 +345,7 @@ stages:
             $hubSub = "$(hubSubscriptionId)"
             if (-not $hubSub) { throw "hubSubscriptionId variable not set" }
             az account set --subscription $hubSub
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Push-Location $tfDir
             try {
@@ -368,7 +368,7 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
             Push-Location $tfDir
             try {
@@ -391,7 +391,7 @@ stages:
       #     inlineScript: |
       #       $ErrorActionPreference='Stop'
       #       az account set --subscription "$(finalSpokeSubscriptionId)"
-      #       $tfDir = "$(Build.SourcesDirectory)/terraform"
+      #       $tfDir   = "$(Build.SourcesDirectory)/terraform"
       #       $varFile = Join-Path $tfDir "terraform.tfvars"
       #       Push-Location $tfDir
       #       try {
