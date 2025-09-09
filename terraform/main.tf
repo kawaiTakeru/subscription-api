@@ -1,7 +1,3 @@
-#############################################
-# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
-#############################################
-
 terraform {
   required_version = ">= 1.3.0"
   required_providers {
@@ -27,27 +23,22 @@ provider "azurerm" {
 }
 
 locals {
-  # 命名: 英数字以外を除去したスラッグ（regexall + join + trimspace）
-  project_raw        = trimspace(var.project_name)
-  purpose_raw        = trimspace(var.purpose_name)
-  project_slug       = lower(join("", regexall(local.project_raw, "[0-9A-Za-z]")))
-  purpose_slug_base  = lower(join("", regexall(local.purpose_raw, "[0-9A-Za-z]")))
-  purpose_slug       = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
-    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
-  )
+  # 命名（tfvars をそのまま小文字化＋前後空白除去）
+  project_slug = lower(trimspace(var.project_name))
+  purpose_slug = lower(trimspace(var.purpose_name))
 
   base_parts = [for p in [local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence] : p if length(p) > 0]
   base       = join("-", local.base_parts)
 
-  # 各リソース名（命名規約準拠）
-  name_rg                  = local.base != "" ? "rg-${local.base}" : null
-  name_vnet                = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet              = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
-  name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
-  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+  # 各リソース名
+  name_rg                  = "rg-${local.base}"
+  name_vnet                = "vnet-${local.base}"
+  name_subnet              = "snet-${local.base}"
+  name_nsg                 = "nsg-${local.base}"
+  name_sr_allow            = "sr-${local.base}-001"
+  name_sr_deny_internet_in = "sr-${local.base}-002"
+  name_vnetpeer_hub2spoke  = "vnetpeerhub2spoke-${local.base}"
+  name_vnetpeer_spoke2hub  = "vnetpeerspoke2hub-${local.base}"
 }
 
 # RG
@@ -155,40 +146,9 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# Debug outputs（Terraform が見ている値を可視化）
-output "debug_project_name" {
-  value = var.project_name
-}
-
-output "debug_purpose_name" {
-  value = var.purpose_name
-}
-
-output "debug_project_slug" {
-  value = local.project_slug
-}
-
-output "debug_purpose_slug" {
-  value = local.purpose_slug
-}
-
-output "base_naming" {
-  value       = local.base
-  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
-}
-
-output "rg_expected_name" {
-  value = local.name_rg
-}
-
-output "vnet_expected_name" {
-  value = local.name_vnet
-}
-
-output "spoke_rg_name" {
-  value = azurerm_resource_group.rg.name
-}
-
-output "spoke_vnet_name" {
-  value = azurerm_virtual_network.vnet.name
-}
+# 命名確認
+output "base_naming"      { value = local.base }
+output "rg_expected_name" { value = local.name_rg }
+output "vnet_expected_name" { value = local.name_vnet }
+output "spoke_rg_name"    { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"  { value = azurerm_virtual_network.vnet.name }
