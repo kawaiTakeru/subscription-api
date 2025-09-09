@@ -27,7 +27,7 @@ stages:
       # Step0: サブスクリプション（新規作成 or 既存再利用）
       - task: AzureCLI@2
         name: step0
-        displayName: Step0 - Subscription (create or reuse)
+        displayName: Step0 - Subscription (create or reuse) and export naming vars
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
@@ -49,28 +49,46 @@ stages:
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
             }
+            function To-Slug([string]$s) {
+              if (-not $s) { return "" }
+              $s = $s.ToLowerInvariant()
+              return ($s -replace '[^a-z0-9]', '')
+            }
             function Is-Guid([string]$s) {
               return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             }
 
             if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing." }
 
-            # 既存サブスクリプションを再利用（tfvars の指定を尊重）
+            # Read naming inputs and export as pipeline variables (belt and suspenders)
+            $pj  = Get-TfVar $varFile "project_name"
+            $pu  = Get-TfVar $varFile "purpose_name"
+            $env = Get-TfVar $varFile "environment_id"; if (-not $env) { $env = "prd" }
+            $rc  = Get-TfVar $varFile "region_code";    if (-not $rc)  { $rc  = "jpe" }
+            $seq = Get-TfVar $varFile "sequence";       if (-not $seq) { $seq = "001" }
+
+            Write-Host "##vso[task.setvariable variable=tfProjectName]$pj"
+            Write-Host "##vso[task.setvariable variable=tfPurposeName]$pu"
+            Write-Host "##vso[task.setvariable variable=tfEnvironmentId]$env"
+            Write-Host "##vso[task.setvariable variable=tfRegionCode]$rc"
+            Write-Host "##vso[task.setvariable variable=tfSequence]$seq"
+
+            # Subscription selection (reuse/new) - reuse path supported
             $createRaw   = Get-TfVar $varFile "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $varFile "spoke_subscription_id"
-
             if (-not $createFlag -and -not $spokeIdInTf) {
               throw "create_subscription=false の場合は spoke_subscription_id が必須です。"
             }
-            if ($createFlag) {
-              throw "本パイプライン構成は既存サブスクリプション再利用（create_subscription=false）の想定です。tfvars を修正してください。"
+            $finalSubId = if ($createFlag) { "" } else { $spokeIdInTf.Trim() }
+            if (-not $finalSubId) {
+              # 新規作成フローをこのパイプラインで使わない場合はエラーにするか、必要に応じて実装を追加してください
+              throw "This pipeline assumes reusing an existing subscription. Set create_subscription=false and spoke_subscription_id in terraform.tfvars."
             }
+            if (-not (Is-Guid($finalSubId))) { throw "spoke_subscription_id is not a valid GUID: $finalSubId" }
 
-            if (-not (Is-Guid $spokeIdInTf)) { throw "spoke_subscription_id is not a valid GUID: $spokeIdInTf" }
-
-            Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$spokeIdInTf"
-            Write-Host "Resolved finalSpokeSubscriptionId=$spokeIdInTf"
+            Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
+            Write-Host "Resolved finalSpokeSubscriptionId=$finalSubId"
 
       # Step1: RG
       - task: AzureCLI@2
@@ -79,15 +97,17 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: $(tfProjectName)
+          TF_VAR_purpose_name: $(tfPurposeName)
+          TF_VAR_environment_id: $(tfEnvironmentId)
+          TF_VAR_region_code: $(tfRegionCode)
+          TF_VAR_sequence: $(tfSequence)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            if (-not ("$(finalSpokeSubscriptionId)" -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')) {
-              throw "finalSpokeSubscriptionId is not a valid GUID: $(finalSpokeSubscriptionId)"
-            }
             az account set --subscription "$(finalSpokeSubscriptionId)"
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
@@ -113,6 +133,11 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: $(tfProjectName)
+          TF_VAR_purpose_name: $(tfPurposeName)
+          TF_VAR_environment_id: $(tfEnvironmentId)
+          TF_VAR_region_code: $(tfRegionCode)
+          TF_VAR_sequence: $(tfSequence)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
@@ -144,6 +169,11 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: $(tfProjectName)
+          TF_VAR_purpose_name: $(tfPurposeName)
+          TF_VAR_environment_id: $(tfEnvironmentId)
+          TF_VAR_region_code: $(tfRegionCode)
+          TF_VAR_sequence: $(tfSequence)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
@@ -179,13 +209,22 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: $(tfProjectName)
+          TF_VAR_purpose_name: $(tfPurposeName)
+          TF_VAR_environment_id: $(tfEnvironmentId)
+          TF_VAR_region_code: $(tfRegionCode)
+          TF_VAR_sequence: $(tfSequence)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $hubSub = "$(hubSubscriptionId)"
+            if (-not $hubSub) { throw "hubSubscriptionId variable not set" }
+            az account set --subscription $hubSub
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
+            Push-Location $tfDir
             try {
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
@@ -199,6 +238,11 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: $(tfProjectName)
+          TF_VAR_purpose_name: $(tfPurposeName)
+          TF_VAR_environment_id: $(tfEnvironmentId)
+          TF_VAR_region_code: $(tfRegionCode)
+          TF_VAR_sequence: $(tfSequence)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
@@ -206,7 +250,8 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
+            Push-Location $tfDir
             try {
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
