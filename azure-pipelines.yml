@@ -9,10 +9,12 @@ variables:
     value: true
   - name: USE_TARGETED_APPLY
     value: true   # 安定後は false 推奨（フル apply）
+  - name: TF_IN_AUTOMATION
+    value: true   # Terraform を非対話モードに
 
 stages:
 - stage: provision_all
-  displayName: Provision Subscription + Network (Compat with named or computed resources)
+  displayName: Provision Subscription + Network (Local state, no remote backend)
   jobs:
   - job: terraform_job
     displayName: Terraform Orchestration
@@ -87,10 +89,13 @@ stages:
                   if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
                   Push-Location $tfDir
                   try {
-                    terraform init -no-color
+                    # リモート backend を無効化して init
+                    terraform init -no-color -input=false -backend=false -reconfigure
                     if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
-                    terraform apply -no-color -auto-approve -target azapi_resource.subscription[0]
+
+                    terraform apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
+
                     $subOut = terraform output -raw subscription_id 2>$null
                     if ($LASTEXITCODE -ne 0 -or -not $subOut) { $subOut = Get-SubscriptionIdFromAlias $aliasName }
                     if (-not $subOut) { throw "Could not resolve subscription id after creation." }
@@ -125,7 +130,53 @@ stages:
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
             Write-Host "Resolved finalSpokeSubscriptionId=$finalSubId (aliasCreatedNew=$aliasCreatedNew)"
 
-      # Step1: RG（rg_name が無い場合は命名規約で補完 + 既存なら import）
+      # 名前を tfvars から取得、無い場合は規約で補完
+      - task: PowerShell@2
+        displayName: Compute resource names (for import/check)
+        inputs:
+          targetType: inline
+          script: |
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfvars = Join-Path $tfDir "terraform.tfvars"
+
+            function Get-TfVar {
+              param([string]$Path,[string]$Key)
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+              if (-not $line) { return "" }
+              $val = $line -replace "^\s*$Key\s*=\s*", ""
+              if ($val -match "#") { $val = ($val -split "#")[0] }
+              $val.Trim().Trim('"')
+            }
+            function To-Slug([string]$s) {
+              if (-not $s) { return "" }
+              $t = $s.Trim()
+              $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
+              return $t.ToLower().Trim('-')
+            }
+
+            $rgName   = Get-TfVar $tfvars "rg_name"
+            $vnetName = Get-TfVar $tfvars "vnet_name"
+            $subnet   = Get-TfVar $tfvars "subnet_name"
+            $nsg      = Get-TfVar $tfvars "nsg_name"
+
+            if (-not $rgName -or -not $vnetName -or -not $subnet -or -not $nsg) {
+              $project    = To-Slug (Get-TfVar $tfvars 'project_name')
+              $purpose    = To-Slug (Get-TfVar $tfvars 'purpose_name')
+              $envId      = (Get-TfVar $tfvars 'environment_id')
+              $regionCode = (Get-TfVar $tfvars 'region_code')
+              $seq        = (Get-TfVar $tfvars 'sequence')
+            }
+            if (-not $rgName)   { $rgName   = "rg-$project-$purpose-$envId-$regionCode-$seq" }
+            if (-not $vnetName) { $vnetName = "vnet-$project-$purpose-$envId-$regionCode-$seq" }
+            if (-not $subnet)   { $subnet   = "snet-$project-$purpose-$envId-$regionCode-$seq" }
+            if (-not $nsg)      { $nsg      = "nsg-$project-$purpose-$envId-$regionCode-$seq" }
+
+            Write-Host "##vso[task.setvariable variable=ComputedRgName]$rgName"
+            Write-Host "##vso[task.setvariable variable=ComputedVnetName]$vnetName"
+            Write-Host "##vso[task.setvariable variable=ComputedSubnetName]$subnet"
+            Write-Host "##vso[task.setvariable variable=ComputedNsgName]$nsg"
+
+      # Step1: Resource Group（既存なら import してから apply）
       - task: AzureCLI@2
         displayName: Step1 - Resource Group
         env:
@@ -139,46 +190,16 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             $tfDir = "$(Build.SourcesDirectory)/terraform"
-            $tfvars = Join-Path $tfDir "terraform.tfvars"
-
-            function Get-TfVar {
-              param([string]$Path,[string]$Key)
-              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-              if (-not $line) { return "" }
-              $val = $line -replace "^\s*$Key\s*=\s*", ""
-              if ($val -match "#") { $val = ($val -split "#")[0] }
-              $val.Trim().Trim('"')
-            }
-            function To-Slug([string]$s) {
-              if (-not $s) { return "" }
-              $t = $s.Trim()
-              $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
-              return $t.ToLower().Trim('-')
-            }
-
             az account set --subscription "$(finalSpokeSubscriptionId)"
 
-            # 1) tfvars に rg_name があればそれを使う。2) 無ければ命名規約から組み立て。
-            $rgName = Get-TfVar $tfvars "rg_name"
-            if (-not $rgName) {
-              $project    = To-Slug (Get-TfVar $tfvars 'project_name')
-              $purpose    = To-Slug (Get-TfVar $tfvars 'purpose_name')
-              $envId      = (Get-TfVar $tfvars 'environment_id')
-              $regionCode = (Get-TfVar $tfvars 'region_code')
-              $seq        = (Get-TfVar $tfvars 'sequence')
-              if (-not $project -or -not $purpose -or -not $envId -or -not $regionCode -or -not $seq) {
-                throw "rg_name not found in tfvars and naming components are incomplete (need project_name, purpose_name, environment_id, region_code, sequence)."
-              }
-              $base  = ($project,$purpose,$envId,$regionCode,$seq) -join '-'
-              $rgName = "rg-$base"
-              Write-Host "rg_name not provided. Computed: $rgName"
-            }
-
+            $rgName = "$(ComputedRgName)"
             $rgId = "/subscriptions/$(finalSpokeSubscriptionId)/resourceGroups/$rgName"
+            Write-Host "RG target: $rgName"
 
             Push-Location $tfDir
             try {
-              terraform init -no-color
+              # backend 無効で init（対話抑止）
+              terraform init -no-color -input=false -backend=false -reconfigure
 
               # 既存 RG が Azure にあるのに state に無い場合だけ import
               $exists  = (az group exists -n $rgName)
@@ -190,15 +211,15 @@ stages:
               }
 
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_resource_group.rg
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -auto-approve }
+                terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
 
-      # Step2: VNet（vnet_name が無い場合は命名規約で補完）
+      # Step2: VNet（state を引き継いで apply）
       - task: AzureCLI@2
         displayName: Step2 - VNet
         env:
@@ -211,52 +232,20 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
-            $tfvars = Join-Path $tfDir "terraform.tfvars"
-
-            function Get-TfVar {
-              param([string]$Path,[string]$Key)
-              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-              if (-not $line) { return "" }
-              $val = $line -replace "^\s*$Key\s*=\s*", ""
-              if ($val -match "#") { $val = ($val -split "#")[0] }
-              $val.Trim().Trim('"')
-            }
-            function To-Slug([string]$s) {
-              if (-not $s) { return "" }
-              $t = $s.Trim()
-              $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
-              return $t.ToLower().Trim('-')
-            }
-
             az account set --subscription "$(finalSpokeSubscriptionId)"
-
-            $rgName = Get-TfVar $tfvars "rg_name"
-            $vnetName = Get-TfVar $tfvars "vnet_name"
-            if (-not $rgName -or -not $vnetName) {
-              $project    = To-Slug (Get-TfVar $tfvars 'project_name')
-              $purpose    = To-Slug (Get-TfVar $tfvars 'purpose_name')
-              $envId      = (Get-TfVar $tfvars 'environment_id')
-              $regionCode = (Get-TfVar $tfvars 'region_code')
-              $seq        = (Get-TfVar $tfvars 'sequence')
-              if (-not $rgName)   { if (-not $project -or -not $purpose -or -not $envId -or -not $regionCode -or -not $seq) { throw "rg_name/vnet_name missing and naming components incomplete." } $rgName  = "rg-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              if (-not $vnetName) { if (-not $project -or -not $purpose -or -not $envId -or -not $regionCode -or -not $seq) { throw "rg_name/vnet_name missing and naming components incomplete." } $vnetName = "vnet-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              Write-Host "Computed names: rg=$rgName vnet=$vnetName"
-            }
-
-            Push-Location $tfDir
+            Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
+              terraform init -no-color -input=false -backend=false -reconfigure
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_virtual_network.vnet
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -auto-approve }
+                terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
-      # Step3: Subnet + NSG（名前が無い場合は命名規約で補完）
+      # Step3: Subnet + NSG
       - task: AzureCLI@2
         displayName: Step3 - Subnet + NSG
         env:
@@ -269,58 +258,18 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
-            $tfvars = Join-Path $tfDir "terraform.tfvars"
-
-            function Get-TfVar {
-              param([string]$Path,[string]$Key)
-              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-              if (-not $line) { return "" }
-              $val = $line -replace "^\s*$Key\s*=\s*", ""
-              if ($val -match "#") { $val = ($val -split "#")[0] }
-              $val.Trim().Trim('"')
-            }
-            function To-Slug([string]$s) {
-              if (-not $s) { return "" }
-              $t = $s.Trim()
-              $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
-              return $t.ToLower().Trim('-')
-            }
-
             az account set --subscription "$(finalSpokeSubscriptionId)"
-
-            $rgName    = Get-TfVar $tfvars "rg_name"
-            $vnetName  = Get-TfVar $tfvars "vnet_name"
-            $subnet    = Get-TfVar $tfvars "subnet_name"
-            $nsg       = Get-TfVar $tfvars "nsg_name"
-
-            if (-not $rgName -or -not $vnetName -or -not $subnet -or -not $nsg) {
-              $project    = To-Slug (Get-TfVar $tfvars 'project_name')
-              $purpose    = To-Slug (Get-TfVar $tfvars 'purpose_name')
-              $envId      = (Get-TfVar $tfvars 'environment_id')
-              $regionCode = (Get-TfVar $tfvars 'region_code')
-              $seq        = (Get-TfVar $tfvars 'sequence')
-              if (-not $project -or -not $purpose -or -not $envId -or -not $regionCode -or -not $seq) {
-                throw "subnet/nsg naming missing and naming components incomplete."
-              }
-              if (-not $rgName)   { $rgName   = "rg-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              if (-not $vnetName) { $vnetName = "vnet-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              if (-not $subnet)   { $subnet   = "snet-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              if (-not $nsg)      { $nsg      = "nsg-$($project)-$($purpose)-$($envId)-$($regionCode)-$($seq)" }
-              Write-Host "Computed names: rg=$rgName vnet=$vnetName subnet=$subnet nsg=$nsg"
-            }
-
-            Push-Location $tfDir
+            Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
+              terraform init -no-color -input=false -backend=false -reconfigure
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve `
+                terraform apply -no-color -input=false -auto-approve `
                   -target azurerm_network_security_group.subnet_nsg `
                   -target azurerm_subnet.subnet `
                   -target azurerm_subnet_network_security_group_association.subnet_assoc
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -auto-approve }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
@@ -343,8 +292,8 @@ stages:
             az account set --subscription $hubSub
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform init -no-color -input=false -backend=false -reconfigure
+              terraform apply -no-color -input=false -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
@@ -364,7 +313,7 @@ stages:
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform init -no-color -input=false -backend=false -reconfigure
+              terraform apply -no-color -input=false -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
