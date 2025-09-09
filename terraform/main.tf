@@ -212,7 +212,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 # Debug outputs (命名確認)
 output "base_naming" {
   value       = local.base
-  description = "命名の基底（bft1-kensho1-prd-jpe-001 など）"
+  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
 }
 output "rg_expected_name"   { value = local.name_rg }
 output "vnet_expected_name" { value = local.name_vnet }
