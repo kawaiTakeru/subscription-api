@@ -1,33 +1,43 @@
-# ...（前略）
+#############################################
+# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+#############################################
+
+terraform {
+  required_version = ">= 1.3.0"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.41"
+    }
+  }
+}
+
+provider "azurerm" {
+  alias           = "spoke"
+  features        {}
+  subscription_id = var.spoke_subscription_id
+  tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
+}
+
+provider "azurerm" {
+  alias           = "hub"
+  features        {}
+  subscription_id = var.hub_subscription_id
+  tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
+}
 
 locals {
-  # Billing scope
-  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
-
-  # Subscription creation flow
-  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
-  effective_spoke_subscription_id = coalesce(
-    var.spoke_subscription_id,
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
-  )
-
-  # 命名: スラッグ化（regexreplace + trimspace）
-  project_raw  = trimspace(var.project_name)
-  purpose_raw  = trimspace(var.purpose_name)
-
-  # 英数字のみを残す（日本語「検証」は特例で kensho に）
-  project_slug         = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
-  purpose_slug_initial = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
-  purpose_slug         = length(local.purpose_slug_initial) > 0 ? local.purpose_slug_initial : (
-    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_initial
+  # 命名: 英数字以外を除去したスラッグ（regexall + join + trimspace）
+  project_raw        = trimspace(var.project_name)
+  purpose_raw        = trimspace(var.purpose_name)
+  project_slug       = lower(join("", regexall(local.project_raw, "[0-9A-Za-z]")))
+  purpose_slug_base  = lower(join("", regexall(local.purpose_raw, "[0-9A-Za-z]")))
+  purpose_slug       = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
+    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
   base_parts = [for p in [local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence] : p if length(p) > 0]
   base       = join("-", local.base_parts)
-
-  # サブスクリプション命名（未指定なら規約で自動作成）
-  name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
-  name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
   # 各リソース名（命名規約準拠）
   name_rg                  = local.base != "" ? "rg-${local.base}" : null
@@ -40,4 +50,145 @@ locals {
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 }
 
-# ...（後略）
+# RG
+resource "azurerm_resource_group" "rg" {
+  provider = azurerm.spoke
+  name     = local.name_rg
+  location = var.region
+}
+
+# VNet
+resource "azurerm_virtual_network" "vnet" {
+  provider            = azurerm.spoke
+  name                = local.name_vnet
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.vnet_number_of_ips
+  }
+}
+
+# NSG
+resource "azurerm_network_security_group" "subnet_nsg" {
+  provider            = azurerm.spoke
+  name                = local.name_nsg
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = local.name_sr_allow
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = var.allowed_port
+    source_address_prefix      = var.vpn_client_pool_cidr
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = local.name_sr_deny_internet_in
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+  }
+}
+
+# Subnet
+resource "azurerm_subnet" "subnet" {
+  provider             = azurerm.spoke
+  name                 = local.name_subnet
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.subnet_number_of_ips
+  }
+}
+
+# NSG Association
+resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
+  provider                  = azurerm.spoke
+  subnet_id                 = azurerm_subnet.subnet.id
+  network_security_group_id = azurerm_network_security_group.subnet_nsg.id
+}
+
+# Peering Hub -> Spoke
+resource "azurerm_virtual_network_peering" "hub_to_spoke" {
+  provider                  = azurerm.hub
+  name                      = local.name_vnetpeer_hub2spoke
+  resource_group_name       = var.hub_rg_name
+  virtual_network_name      = var.hub_vnet_name
+  remote_virtual_network_id = "/subscriptions/${var.spoke_subscription_id}/resourceGroups/${local.name_rg}/providers/Microsoft.Network/virtualNetworks/${local.name_vnet}"
+
+  allow_forwarded_traffic = true
+  allow_gateway_transit   = true
+  use_remote_gateways     = false
+
+  depends_on = [azurerm_virtual_network.vnet]
+}
+
+# Peering Spoke -> Hub
+resource "azurerm_virtual_network_peering" "spoke_to_hub" {
+  provider                  = azurerm.spoke
+  name                      = local.name_vnetpeer_spoke2hub
+  resource_group_name       = local.name_rg
+  virtual_network_name      = local.name_vnet
+  remote_virtual_network_id = "/subscriptions/${var.hub_subscription_id}/resourceGroups/${var.hub_rg_name}/providers/Microsoft.Network/virtualNetworks/${var.hub_vnet_name}"
+
+  allow_forwarded_traffic = true
+  allow_gateway_transit   = false
+  use_remote_gateways     = true
+
+  depends_on = [
+    azurerm_virtual_network.vnet,
+    azurerm_virtual_network_peering.hub_to_spoke
+  ]
+}
+
+# Debug outputs（Terraform が見ている値を可視化）
+output "debug_project_name" {
+  value = var.project_name
+}
+
+output "debug_purpose_name" {
+  value = var.purpose_name
+}
+
+output "debug_project_slug" {
+  value = local.project_slug
+}
+
+output "debug_purpose_slug" {
+  value = local.purpose_slug
+}
+
+output "base_naming" {
+  value       = local.base
+  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
+}
+
+output "rg_expected_name" {
+  value = local.name_rg
+}
+
+output "vnet_expected_name" {
+  value = local.name_vnet
+}
+
+output "spoke_rg_name" {
+  value = azurerm_resource_group.rg.name
+}
+
+output "spoke_vnet_name" {
+  value = azurerm_virtual_network.vnet.name
+}
