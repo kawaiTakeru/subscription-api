@@ -1,160 +1,87 @@
-trigger: none
-pr: none
+# 抜粋: Step1〜Step4 だけ置き換え（他はそのまま）
+# 重要点:
+# - すべて -var-file を付与
+# - Step1 冒頭で override.auto.tfvars を削除
+# - 初回は USE_TARGETED_APPLY=false 推奨（上に定義されている場合）
 
-pool:
-  vmImage: windows-2022
+# Step1: RG
+- task: AzureCLI@2
+  displayName: Step1 - Resource Group
+  env:
+    ARM_USE_AZCLI_AUTH: 'true'
+    TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+    TF_VAR_create_subscription: false
+  inputs:
+    azureSubscription: snp-pipeline-api-wif
+    scriptType: pscore
+    scriptLocation: inlineScript
+    inlineScript: |
+      $ErrorActionPreference='Stop'
+      az account set --subscription "$(finalSpokeSubscriptionId)"
+      $tfDir   = "$(Build.SourcesDirectory)/terraform"
+      $varFile = Join-Path $tfDir "terraform.tfvars"
+      if (Test-Path (Join-Path $tfDir "override.auto.tfvars")) {
+        Write-Host "Found override.auto.tfvars -> remove to avoid overriding tfvars"
+        Remove-Item -Force (Join-Path $tfDir "override.auto.tfvars")
+      }
+      # 念のため今から使う tfvars をログに出す（デバッグ）
+      Write-Host "----- terraform.tfvars (begin) -----"
+      Get-Content $varFile | Write-Host
+      Write-Host "----- terraform.tfvars (end) -----"
 
-variables:
-  - name: System.Debug
-    value: false
-  - name: USE_TARGETED_APPLY
-    value: false   # 初回はフル適用で state/outputs を確実に更新
+      Push-Location $tfDir
+      try {
+        terraform init -no-color
+        terraform apply -no-color -auto-approve -var-file="$varFile"
+        # 命名確認（outputs は full apply 後に state に出ます）
+        terraform output -no-color base_naming
+        terraform output -no-color rg_expected_name
+        terraform output -no-color spoke_rg_name
+      } finally { Pop-Location }
 
-stages:
-- stage: provision_all
-  displayName: Provision Subscription + Network
-  jobs:
-  - job: terraform_job
-    displayName: Terraform Orchestration
-    steps:
-      - checkout: self
+# Step2: VNet
+- task: AzureCLI@2
+  displayName: Step2 - VNet
+  env:
+    ARM_USE_AZCLI_AUTH: 'true'
+    TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+    TF_VAR_create_subscription: false
+  inputs:
+    azureSubscription: snp-pipeline-api-wif
+    scriptType: pscore
+    scriptLocation: inlineScript
+    inlineScript: |
+      $ErrorActionPreference='Stop'
+      az account set --subscription "$(finalSpokeSubscriptionId)"
+      $tfDir   = "$(Build.SourcesDirectory)/terraform"
+      $varFile = Join-Path $tfDir "terraform.tfvars"
+      Push-Location $tfDir
+      try {
+        terraform init -no-color
+        terraform apply -no-color -auto-approve -var-file="$varFile"
+        terraform output -no-color vnet_expected_name
+      } finally { Pop-Location }
 
-      - task: TerraformInstaller@1
-        displayName: Install Terraform 1.7.5
-        inputs:
-          terraformVersion: 1.7.5
+# Step3: Subnet + NSG
+- task: AzureCLI@2
+  displayName: Step3 - Subnet + NSG
+  env:
+    ARM_USE_AZCLI_AUTH: 'true'
+    TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+    TF_VAR_create_subscription: false
+  inputs:
+    azureSubscription: snp-pipeline-api-wif
+    scriptType: pscore
+    scriptLocation: inlineScript
+    inlineScript: |
+      $ErrorActionPreference='Stop'
+      az account set --subscription "$(finalSpokeSubscriptionId)"
+      $tfDir   = "$(Build.SourcesDirectory)/terraform"
+      $varFile = Join-Path $tfDir "terraform.tfvars"
+      Push-Location $tfDir
+      try {
+        terraform init -no-color
+        terraform apply -no-color -auto-approve -var-file="$varFile"
+      } finally { Pop-Location }
 
-      # Step0: 既存サブスクリプション再利用
-      - task: AzureCLI@2
-        name: step0
-        displayName: Step0 - Subscription (reuse)
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing: $varFile" }
-
-            $spokeId = (Get-Content $varFile | Where-Object { $_ -match '^\s*spoke_subscription_id\s*=' } | Select-Object -First 1) `
-              -replace '^\s*spoke_subscription_id\s*=\s*', '' | ForEach-Object { $_.Trim().Trim('"') }
-            if (-not $spokeId) { throw "spoke_subscription_id not set in tfvars (create_subscription=false の場合は必須)" }
-
-            Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$spokeId"
-            Write-Host "Resolved finalSpokeSubscriptionId=$spokeId"
-
-      # Step1: RG
-      - task: AzureCLI@2
-        displayName: Step1 - Resource Group
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            # 念のため以前の override を消す
-            if (Test-Path (Join-Path $tfDir "override.auto.tfvars")) { Remove-Item -Force (Join-Path $tfDir "override.auto.tfvars") }
-            Push-Location $tfDir
-            try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
-              # 命名確認
-              terraform output -no-color base_naming
-              terraform output -no-color rg_expected_name
-              terraform output -no-color spoke_rg_name
-            } finally { Pop-Location }
-
-      # Step2: VNet
-      - task: AzureCLI@2
-        displayName: Step2 - VNet
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            Push-Location $tfDir
-            try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
-              terraform output -no-color vnet_expected_name
-            } finally { Pop-Location }
-
-      # Step3: Subnet + NSG
-      - task: AzureCLI@2
-        displayName: Step3 - Subnet + NSG
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            Push-Location $tfDir
-            try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
-            } finally { Pop-Location }
-
-      # Step4a: Peering Hub -> Spoke
-      - task: AzureCLI@2
-        displayName: Step4a - Peering Hub->Spoke
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
-            Push-Location $tfDir
-            try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
-            } finally { Pop-Location }
-
-      # Step4b: Peering Spoke -> Hub
-      - task: AzureCLI@2
-        displayName: Step4b - Peering Spoke->Hub
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
-            Push-Location $tfDir
-            try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
-            } finally { Pop-Location }
+# Step4a/b も同様に -var-file を付与（略）
