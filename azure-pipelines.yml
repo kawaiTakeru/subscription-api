@@ -7,9 +7,6 @@ pool:
 variables:
   - name: System.Debug
     value: false
-  # 初回はフル適用推奨（state/outputs を確実に反映）
-  - name: USE_TARGETED_APPLY
-    value: false
 
 stages:
 - stage: provision_all
@@ -68,15 +65,11 @@ stages:
             Push-Location $tfDir
             try {
               terraform version
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              terraform init -no-color -compact-warnings
+              terraform apply -no-color -compact-warnings -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
               # 命名の可視化
-              terraform output -no-color debug_project_name
-              terraform output -no-color debug_purpose_name
-              terraform output -no-color debug_project_slug
-              terraform output -no-color debug_purpose_slug
               terraform output -no-color base_naming
               terraform output -no-color rg_expected_name
               terraform output -no-color spoke_rg_name
@@ -115,8 +108,8 @@ stages:
             Push-Location $tfDir
             try {
               terraform version
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              terraform init -no-color -compact-warnings
+              terraform apply -no-color -compact-warnings -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (VNet)" }
 
               terraform output -no-color vnet_expected_name
@@ -155,8 +148,8 @@ stages:
             Push-Location $tfDir
             try {
               terraform version
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              terraform init -no-color -compact-warnings
+              terraform apply -no-color -compact-warnings -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Subnet/NSG)" }
             } finally { Pop-Location }
 
@@ -184,6 +177,7 @@ stages:
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+
             $hubSubId = Get-TfVar $varFile "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id not found in terraform.tfvars" }
             az account set --subscription $hubSubId
@@ -193,8 +187,8 @@ stages:
             Push-Location $tfDir
             try {
               terraform version
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              terraform init -no-color -compact-warnings
+              terraform apply -no-color -compact-warnings -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Hub->Spoke)" }
             } finally { Pop-Location }
 
@@ -231,7 +225,7 @@ stages:
             Push-Location $tfDir
             try {
               terraform version
-              terraform init -no-color
-              terraform apply -no-color -auto-approve -var-file="$varFile"
+              terraform init -no-color -compact-warnings
+              terraform apply -no-color -compact-warnings -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Spoke->Hub)" }
             } finally { Pop-Location }
