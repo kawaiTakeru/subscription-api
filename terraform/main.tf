@@ -47,9 +47,10 @@ locals {
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
-  # スラッグ化（英数字以外を除去し小文字化）
-  project_slug_base = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
-  purpose_slug_base = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
+  # スラッグ化（regex を使わない単純置換 + 小文字化）
+  # 入力は英数字想定。必要最低限の安全化のみ行う。
+  project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
+  purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
   # フォールバック（日本語などで空になった場合）
   project_slug = local.project_slug_base
