@@ -18,7 +18,7 @@ billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
-# 既存サブスクリプションを再利用する場合
+# 既存サブスクリプションを再利用する場合（このまま利用）
 create_subscription   = false
 spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
 
