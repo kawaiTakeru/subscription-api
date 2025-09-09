@@ -7,7 +7,7 @@ pool:
 variables:
   - name: System.Debug
     value: false
-  # 初回はフル適用を推奨（outputs/state を確実に反映）
+  # 初回はフル適用で state/outputs を確実に更新
   - name: USE_TARGETED_APPLY
     value: false
 
@@ -53,11 +53,11 @@ stages:
             $varFile = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing: $varFile" }
 
-            $spokeId = Get-TfVar $varFile "spoke_subscription_id"
-            $createRaw  = Get-TfVar $varFile "create_subscription"
-            $createFlag = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
+            $spokeId   = Get-TfVar $varFile "spoke_subscription_id"
+            $createRaw = Get-TfVar $varFile "create_subscription"
+            $createFlg = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
 
-            if (-not $spokeId -and -not $createFlag) {
+            if (-not $spokeId -and -not $createFlg) {
               throw "create_subscription=false の場合は spoke_subscription_id が必須です（tfvars を確認してください）"
             }
             if ($spokeId -and -not (Is-Guid $spokeId)) {
@@ -90,12 +90,12 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
-            # 過去の残骸で上書きされないよう削除
-            $override = Join-Path $tfDir "override.auto.tfvars"
-            if (Test-Path $override) {
-              Write-Host "Removing leftover $override"
-              Remove-Item -Force $override
-            }
+            # 影響しうる TF_VAR_* を明示的に解除（空の環境変数で上書きされるのを防止）
+            "TF_VAR_project_name","TF_VAR_purpose_name","TF_VAR_environment_id","TF_VAR_region_code","TF_VAR_sequence" |
+              ForEach-Object { if (Test-Path env:$_) { Remove-Item env:$_ -ErrorAction SilentlyContinue } }
+
+            # 全 *.auto.tfvars を削除（過去実行の残骸で上書きされるのを防止）
+            Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             # デバッグ: tfvars の中身を出力（project/purpose が見えること）
             Write-Host "----- terraform.tfvars (begin) -----"
@@ -105,11 +105,12 @@ stages:
             Push-Location $tfDir
             try {
               terraform init -no-color
-              # 命名確認のため初回はフル apply 推奨
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
-              # 命名の可視化
+              # 命名確認（Terraform が見ている値を出力）
+              terraform output -no-color debug_project_name
+              terraform output -no-color debug_purpose_name
               terraform output -no-color base_naming
               terraform output -no-color rg_expected_name
               terraform output -no-color spoke_rg_name
@@ -133,6 +134,9 @@ stages:
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+
+            # 念のため残骸ファイルを除去
+            Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
@@ -161,6 +165,8 @@ stages:
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+
+            Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
@@ -198,6 +204,8 @@ stages:
             if (-not $hubSubId) { throw "hub_subscription_id not found in tfvars" }
             az account set --subscription $hubSubId
 
+            Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
             Push-Location $tfDir
             try {
               terraform init -no-color
@@ -223,6 +231,8 @@ stages:
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+
+            Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
