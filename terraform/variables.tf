@@ -111,3 +111,57 @@ variable "hub_rg_name" {
   description = "Hub Resource Group name"
   type        = string
 }
+
+#############################################
+# ピアリング（Step4 でのみ有効化）
+#############################################
+variable "enable_peering_hub_to_spoke" {
+  description = "Hub -> Spoke ピアリングを作成するか"
+  type        = bool
+  default     = false
+}
+
+variable "enable_peering_spoke_to_hub" {
+  description = "Spoke -> Hub ピアリングを作成するか"
+  type        = bool
+  default     = false
+}
+
+#############################################
+# 互換用（tfvars に残っている未使用キーの警告抑止）
+#############################################
+variable "subscription_workload" {
+  description = "未使用。警告抑止用のダミー"
+  type        = string
+  default     = ""
+}
+
+variable "billing_account_name" {
+  description = "未使用。警告抑止用のダミー"
+  type        = string
+  default     = ""
+}
+
+variable "billing_profile_name" {
+  description = "未使用。警告抑止用のダミー"
+  type        = string
+  default     = ""
+}
+
+variable "invoice_section_name" {
+  description = "未使用。警告抑止用のダミー"
+  type        = string
+  default     = ""
+}
+
+variable "create_subscription" {
+  description = "未使用。警告抑止用のダミー"
+  type        = bool
+  default     = false
+}
+
+variable "management_group_id" {
+  description = "未使用。警告抑止用のダミー"
+  type        = string
+  default     = ""
+}
