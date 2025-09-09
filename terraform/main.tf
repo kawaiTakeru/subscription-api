@@ -46,13 +46,16 @@ locals {
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # 命名: base（スラッグ化: 英数字のみ・小文字）
-  project_slug      = lower(join("", regexall(var.project_name, "[A-Za-z0-9]")))
-  purpose_slug_base = lower(join("", regexall(var.purpose_name, "[A-Za-z0-9]")))
-  purpose_slug      = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
-    var.purpose_name == "検証" ? "kensho" : local.purpose_slug_base
+  # 命名: スラッグ化（regexreplace に一本化）
+  project_raw  = trim(var.project_name)
+  purpose_raw  = trim(var.purpose_name)
+  project_slug = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
+  purpose_slug_initial = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
+  purpose_slug = length(local.purpose_slug_initial) > 0 ? local.purpose_slug_initial : (
+    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_initial
   )
-  base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
+
+  base_parts = [for p in [local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence] : p if length(p) > 0]
   base       = join("-", local.base_parts)
 
   # サブスクリプション命名（未指定なら規約で自動作成）
@@ -214,6 +217,14 @@ output "debug_project_name" {
 
 output "debug_purpose_name" {
   value = var.purpose_name
+}
+
+output "debug_project_slug" {
+  value = local.project_slug
+}
+
+output "debug_purpose_slug" {
+  value = local.purpose_slug
 }
 
 output "base_naming" {
