@@ -13,7 +13,7 @@ variables:
 
 stages:
 - stage: provision_all
-  displayName: Provision Subscription + Network
+  displayName: Provision Network in Existing Subscription
   jobs:
   - job: terraform_job
     displayName: Terraform Orchestration
@@ -25,10 +25,11 @@ stages:
         inputs:
           terraformVersion: 1.7.5
 
-      # Step0: 既存サブスクリプション再利用（tfvars から ID を読み取り、以降に渡す）
+      # Step1: Resource Group
       - task: AzureCLI@2
-        name: step0
-        displayName: Step0 - Subscription (reuse)
+        displayName: Step1 - Resource Group
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
@@ -45,67 +46,33 @@ stages:
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
             }
-            function Is-Guid([string]$s) {
-              return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-            }
-
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing: $varFile" }
-
-            $spokeId   = Get-TfVar $varFile "spoke_subscription_id"
-            $createRaw = Get-TfVar $varFile "create_subscription"
-            $createFlg = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
-
-            if (-not $spokeId -and -not $createFlg) {
-              throw "create_subscription=false の場合は spoke_subscription_id が必須です（tfvars を確認してください）"
-            }
-            if ($spokeId -and -not (Is-Guid $spokeId)) {
-              throw "spoke_subscription_id is not a valid GUID: $spokeId"
-            }
-
-            if ($spokeId) {
-              Write-Host "Reuse existing subscription: $spokeId"
-              Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$spokeId"
-            } else {
-              throw "This pipeline assumes reuse path in Step0. 現在の tfvars を create_subscription=false + spoke_subscription_id で実行してください。"
-            }
-
-      # Step1: Resource Group
-      - task: AzureCLI@2
-        displayName: Step1 - Resource Group
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-        inputs:
-          azureSubscription: snp-pipeline-api-wif
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-
-            $subId = "$(finalSpokeSubscriptionId)"
-            if (-not $subId) { throw "finalSpokeSubscriptionId not set from Step0" }
-            az account set --subscription $subId
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
-            # 命名を上書きしうる要因を除去
-            "TF_VAR_project_name","TF_VAR_purpose_name","TF_VAR_environment_id","TF_VAR_region_code","TF_VAR_sequence" |
+            # 変数汚染を避ける（TF_VAR_* と *.auto.tfvars を除去）
+            "TF_VAR_project_name","TF_VAR_purpose_name","TF_VAR_environment_id","TF_VAR_region_code","TF_VAR_sequence","TF_VAR_spoke_subscription_id" |
               ForEach-Object { if (Test-Path env:$_) { Remove-Item env:$_ -ErrorAction SilentlyContinue } }
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+            # tfvars から Spoke サブスクリプションID を取得して CLI のコンテキストを合わせる
+            $spokeId = Get-TfVar $varFile "spoke_subscription_id"
+            if (-not $spokeId) { throw "spoke_subscription_id not set in terraform.tfvars" }
+            az account set --subscription $spokeId
+
+            # デバッグ: tfvars の中身（命名値が見えること）
             Write-Host "----- terraform.tfvars (begin) -----"
             Get-Content $varFile | Write-Host
             Write-Host "----- terraform.tfvars (end) -----"
 
             Push-Location $tfDir
             try {
+              terraform version
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
-              # 命名確認
+              # 命名の可視化
               terraform output -no-color debug_project_name
               terraform output -no-color debug_purpose_name
               terraform output -no-color debug_project_slug
@@ -127,17 +94,27 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
 
-            $subId = "$(finalSpokeSubscriptionId)"
-            if (-not $subId) { throw "finalSpokeSubscriptionId not set from Step0" }
-            az account set --subscription $subId
+            function Get-TfVar {
+              param([string]$Path,[string]$Key)
+              if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+              if (-not $line) { return "" }
+              $val = $line -replace "^\s*$Key\s*=\s*", ""
+              if ($val -match "#") { $val = ($val -split "#")[0] }
+              $val.Trim().Trim('"')
+            }
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+            $spokeId = Get-TfVar $varFile "spoke_subscription_id"
+            if (-not $spokeId) { throw "spoke_subscription_id not set in terraform.tfvars" }
+            az account set --subscription $spokeId
 
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
+              terraform version
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (VNet)" }
@@ -157,23 +134,33 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
 
-            $subId = "$(finalSpokeSubscriptionId)"
-            if (-not $subId) { throw "finalSpokeSubscriptionId not set from Step0" }
-            az account set --subscription $subId
+            function Get-TfVar {
+              param([string]$Path,[string]$Key)
+              if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+              if (-not $line) { return "" }
+              $val = $line -replace "^\s*$Key\s*=\s*", ""
+              if ($val -match "#") { $val = ($val -split "#")[0] }
+              $val.Trim().Trim('"')
+            }
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+            $spokeId = Get-TfVar $varFile "spoke_subscription_id"
+            if (-not $spokeId) { throw "spoke_subscription_id not set in terraform.tfvars" }
+            az account set --subscription $spokeId
 
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
+              terraform version
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Subnet/NSG)" }
             } finally { Pop-Location }
 
-      # Step4a: Peering Hub -> Spoke（Hub側サブスクリプションで実行）
+      # Step4a: Peering Hub -> Spoke（Hub側で実行）
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
         env:
@@ -197,21 +184,21 @@ stages:
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
-
             $hubSubId = Get-TfVar $varFile "hub_subscription_id"
-            if (-not $hubSubId) { throw "hub_subscription_id not found in tfvars" }
+            if (-not $hubSubId) { throw "hub_subscription_id not found in terraform.tfvars" }
             az account set --subscription $hubSubId
 
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
+              terraform version
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Hub->Spoke)" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke -> Hub（Spoke 側サブスクリプションで実行）
+      # Step4b: Peering Spoke -> Hub（Spoke 側で実行）
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
         env:
@@ -223,17 +210,27 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
 
-            $subId = "$(finalSpokeSubscriptionId)"
-            if (-not $subId) { throw "finalSpokeSubscriptionId not set from Step0" }
-            az account set --subscription $subId
+            function Get-TfVar {
+              param([string]$Path,[string]$Key)
+              if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
+              $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
+              if (-not $line) { return "" }
+              $val = $line -replace "^\s*$Key\s*=\s*", ""
+              if ($val -match "#") { $val = ($val -split "#")[0] }
+              $val.Trim().Trim('"')
+            }
 
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
+            $spokeId = Get-TfVar $varFile "spoke_subscription_id"
+            if (-not $spokeId) { throw "spoke_subscription_id not set in terraform.tfvars" }
+            az account set --subscription $spokeId
 
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
             Push-Location $tfDir
             try {
+              terraform version
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Spoke->Hub)" }
