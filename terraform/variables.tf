@@ -1,6 +1,7 @@
 #############################################
-# 命名用 変数
+# Subscription (Stage0 相当)
 #############################################
+# 命名規約用 変数（<識別子>-<PJ>-<用途>-<環境>-<リージョン略>-<通番>）
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
@@ -39,65 +40,80 @@ variable "sequence" {
   default     = "001"
 }
 
-#############################################
-# Resource Group / VNet
-#############################################
-variable "region" {
-  description = "Azure region (例: japaneast)"
-  type        = string
-  default     = "japaneast"
-}
-
-variable "ipam_pool_id" {
-  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
-  type        = string
-}
-
-variable "vnet_number_of_ips" {
-  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
-  type        = number
-}
-
-#############################################
-# Subnet + NSG
-#############################################
-variable "subnet_number_of_ips" {
-  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
-  type        = number
-}
-
-variable "vpn_client_pool_cidr" {
-  description = "VPN クライアントプール CIDR (許可元)"
-  type        = string
-}
-
-variable "allowed_port" {
-  description = "許可ポート (RDP=3389 / SSH=22 など)"
-  type        = number
-  default     = 3389
-}
-
-#############################################
-# Hub / Spoke Subscriptions
-#############################################
-variable "spoke_subscription_id" {
-  description = "既存 Spoke Subscription ID（必須）"
-  type        = string
-}
-
-variable "spoke_tenant_id" {
-  description = "Spoke Tenant ID（必要に応じて）"
+# サブスクリプション名（未指定なら自動生成: sub-<base>）
+variable "subscription_alias_name" {
+  description = "内部で使われるサブスクリプションエイリアス名（空なら命名規約で自動生成）"
   type        = string
   default     = ""
 }
 
+variable "subscription_display_name" {
+  description = "ポータル表示名（空なら命名規約で自動生成）"
+  type        = string
+  default     = ""
+}
+
+variable "billing_account_name" {
+  description = "課金アカウント名"
+  type        = string
+}
+
+variable "billing_profile_name" {
+  description = "課金プロファイル名"
+  type        = string
+}
+
+variable "invoice_section_name" {
+  description = "請求セクション名"
+  type        = string
+}
+
+variable "subscription_workload" {
+  description = "Workload 種別 (Production / DevTest)"
+  type        = string
+  default     = "Production"
+}
+
+variable "create_subscription" {
+  description = "サブスクリプション(エイリアス)を新規作成するか (spoke_subscription_id 空の場合のみ有効)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_billing_check" {
+  description = "Billing 読み取りチェック (未使用: 将来拡張用)"
+  type        = bool
+  default     = false
+}
+
+variable "spoke_subscription_id" {
+  description = "既存 Spoke Subscription ID (既存利用時)。新規作成時は Step0 後に pipeline から注入"
+  type        = string
+  default     = ""
+}
+
+variable "spoke_tenant_id" {
+  description = "Spoke Tenant ID (必要に応じて)"
+  type        = string
+  default     = ""
+}
+
+variable "management_group_id" {
+  description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
+  type        = string
+  default     = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+}
+
+#############################################
+# Hub 側 (Peering 用)
+#############################################
 variable "hub_subscription_id" {
-  description = "Hub Subscription ID（必須）"
+  description = "Hub Subscription ID"
   type        = string
 }
 
 variable "hub_tenant_id" {
-  description = "Hub Tenant ID（必要に応じて）"
+  description = "Hub Tenant ID (必要に応じて)"
   type        = string
   default     = ""
 }
@@ -113,55 +129,42 @@ variable "hub_rg_name" {
 }
 
 #############################################
-# ピアリング（Step4 でのみ有効化）
+# Resource Group (Stage1)
 #############################################
-variable "enable_peering_hub_to_spoke" {
-  description = "Hub -> Spoke ピアリングを作成するか"
-  type        = bool
-  default     = false
-}
-
-variable "enable_peering_spoke_to_hub" {
-  description = "Spoke -> Hub ピアリングを作成するか"
-  type        = bool
-  default     = false
+variable "region" {
+  description = "Azure region (例: japaneast)"
+  type        = string
+  default     = "japaneast"
 }
 
 #############################################
-# 互換用（tfvars に残っている未使用キーの警告抑止）
+# VNet (Stage2)
 #############################################
-variable "subscription_workload" {
-  description = "未使用。警告抑止用のダミー"
+variable "ipam_pool_id" {
+  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
   type        = string
-  default     = ""
 }
 
-variable "billing_account_name" {
-  description = "未使用。警告抑止用のダミー"
-  type        = string
-  default     = ""
+variable "vnet_number_of_ips" {
+  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
+  type        = number
 }
 
-variable "billing_profile_name" {
-  description = "未使用。警告抑止用のダミー"
-  type        = string
-  default     = ""
+#############################################
+# Subnet + NSG (Stage3)
+#############################################
+variable "subnet_number_of_ips" {
+  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
+  type        = number
 }
 
-variable "invoice_section_name" {
-  description = "未使用。警告抑止用のダミー"
+variable "vpn_client_pool_cidr" {
+  description = "VPN クライアントプール CIDR (許可元)"
   type        = string
-  default     = ""
 }
 
-variable "create_subscription" {
-  description = "未使用。警告抑止用のダミー"
-  type        = bool
-  default     = false
-}
-
-variable "management_group_id" {
-  description = "未使用。警告抑止用のダミー"
-  type        = string
-  default     = ""
+variable "allowed_port" {
+  description = "許可ポート (RDP=3389 / SSH=22 など)"
+  type        = number
+  default     = 3389
 }
