@@ -7,9 +7,6 @@ pool:
 variables:
   - name: System.Debug
     value: false
-  # 初回はフル適用推奨（state/outputs を確実に反映）
-  - name: USE_TARGETED_APPLY
-    value: false
 
 stages:
 - stage: provision_all
@@ -90,11 +87,12 @@ stages:
             $tfDir   = "$(Build.SourcesDirectory)/terraform"
             $varFile = Join-Path $tfDir "terraform.tfvars"
 
-            # 命名を上書きしうる要因を除去
+            # 影響しうる TF_VAR_* を解除、*.auto.tfvars の残骸を削除
             "TF_VAR_project_name","TF_VAR_purpose_name","TF_VAR_environment_id","TF_VAR_region_code","TF_VAR_sequence" |
               ForEach-Object { if (Test-Path env:$_) { Remove-Item env:$_ -ErrorAction SilentlyContinue } }
             Get-ChildItem -Path $tfDir -Filter "*.auto.tfvars" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
+            # デバッグ: tfvars の中身
             Write-Host "----- terraform.tfvars (begin) -----"
             Get-Content $varFile | Write-Host
             Write-Host "----- terraform.tfvars (end) -----"
@@ -105,11 +103,12 @@ stages:
               terraform apply -no-color -auto-approve -var-file="$varFile"
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (RG)" }
 
-              # 命名確認
+              # 命名確認（Terraform が見ている値を出力）
               terraform output -no-color debug_project_name
               terraform output -no-color debug_purpose_name
               terraform output -no-color debug_project_slug
               terraform output -no-color debug_purpose_slug
+              terraform output -no-color debug_base_parts
               terraform output -no-color base_naming
               terraform output -no-color rg_expected_name
               terraform output -no-color spoke_rg_name
@@ -173,7 +172,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Subnet/NSG)" }
             } finally { Pop-Location }
 
-      # Step4a: Peering Hub -> Spoke（Hub側サブスクリプションで実行）
+      # Step4a: Peering Hub -> Spoke（Hub側）
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
         env:
@@ -211,7 +210,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed (Peering Hub->Spoke)" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke -> Hub（Spoke 側サブスクリプションで実行）
+      # Step4b: Peering Spoke -> Hub（Spoke側）
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
         env:
