@@ -1,7 +1,5 @@
 #############################################
 # main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
-# CAF略語:
-# - sub(=subscription alias), rg, vnet, snet, nsg, sr(=security rule), vnetpeer
 #############################################
 
 terraform {
@@ -209,7 +207,15 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# Debug outputs（命名確認）
+# Debug outputs（Terraform が見ている値を可視化）
+output "debug_project_name" {
+  value = var.project_name
+}
+
+output "debug_purpose_name" {
+  value = var.purpose_name
+}
+
 output "base_naming" {
   value       = local.base
   description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
