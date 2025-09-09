@@ -19,9 +19,9 @@ invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
 # 新規作成（今回はこちら）
-create_subscription   = true
+#create_subscription   = true
 # 既存再利用する場合は上を false にし、ID を指定
-# spoke_subscription_id = "<existing-subscription-guid>"
+ spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
 
 management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
