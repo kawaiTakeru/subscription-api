@@ -8,13 +8,13 @@ variables:
   - name: System.Debug
     value: true
   - name: USE_TARGETED_APPLY
-    value: true   # 安定後は false 推奨（フル apply）
+    value: true
   - name: TF_IN_AUTOMATION
-    value: true   # Terraform を非対話モードに
+    value: true
 
 stages:
 - stage: provision_all
-  displayName: Provision Subscription + Network (Local state, no remote backend)
+  displayName: Provision Subscription + Network (Local state, clean init each step)
   jobs:
   - job: terraform_job
     displayName: Terraform Orchestration
@@ -26,7 +26,33 @@ stages:
         inputs:
           terraformVersion: 1.7.5
 
-      # Step0: サブスクリプション（新規作成 or 既存再利用）
+      # 共通: Terraform ワークディレクトリ
+      - task: PowerShell@2
+        displayName: Set TF dir variable
+        inputs:
+          targetType: inline
+          script: |
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            if (-not (Test-Path $tfDir)) { throw "Terraform dir not found: $tfDir" }
+            Write-Host "##vso[task.setvariable variable=TF_DIR]$tfDir"
+
+      # util: その場で .terraform と .terraform.lock.hcl を掃除
+      - task: PowerShell@2
+        displayName: Define Clean-TF function
+        inputs:
+          targetType: inline
+          script: |
+            function Clean-TF {
+              param([string]$Dir)
+              $td = Join-Path $Dir ".terraform"
+              $lk = Join-Path $Dir ".terraform.lock.hcl"
+              if (Test-Path $td) { Write-Host "Remove $td"; Remove-Item -Recurse -Force $td }
+              if (Test-Path $lk) { Write-Host "Remove $lk"; Remove-Item -Force $lk }
+            }
+            Set-Alias -Name CleanTF -Value Clean-TF
+            Write-Host "##vso[task.setvariable variable=HasCleanFunc]true"
+
+      # Step0: Subscription（create or reuse）
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
@@ -36,9 +62,7 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
-            Write-Host "Terraform dir: $tfDir"
+            $tfDir = "$(TF_DIR)"
 
             function Get-TfVar {
               param([string]$Path,[string]$Key)
@@ -48,6 +72,11 @@ stages:
               $val = $line -replace "^\s*$Key\s*=\s*", ""
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
+            }
+            function Clean-TF { param([string]$Dir)
+              $td = Join-Path $Dir ".terraform"; $lk = Join-Path $Dir ".terraform.lock.hcl"
+              if (Test-Path $td) { Remove-Item -Recurse -Force $td }
+              if (Test-Path $lk) { Remove-Item -Force $lk }
             }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
@@ -65,9 +94,7 @@ stages:
               foreach ($cmd in @(
                 { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
                 { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
-              )) {
-                try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {}
-              }
+              )) { try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {} }
               return ""
             }
 
@@ -87,38 +114,41 @@ stages:
                   $finalSubId = $reuseId
                 } else {
                   if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
-                  Push-Location $tfDir
-                  try {
-                    # リモート backend を無効化して init
-                    terraform init -no-color -input=false -backend=false -reconfigure
-                    if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
+                  Clean-TF $tfDir
+                  terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+                  if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step0)" }
 
-                    terraform apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0]
-                    if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
+                  terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0]
+                  if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    $subOut = terraform output -raw subscription_id 2>$null
-                    if ($LASTEXITCODE -ne 0 -or -not $subOut) { $subOut = Get-SubscriptionIdFromAlias $aliasName }
-                    if (-not $subOut) { throw "Could not resolve subscription id after creation." }
-                    $finalSubId = $subOut.Trim()
-                    $aliasCreatedNew = "true"
+                  $subOut = terraform -chdir="$tfDir" output -raw subscription_id 2>$null
+                  if ($LASTEXITCODE -ne 0 -or -not $subOut) { $subOut = Get-SubscriptionIdFromAlias $aliasName }
+                  if (-not $subOut) { throw "Could not resolve subscription id after creation." }
+                  $finalSubId = $subOut.Trim()
+                  $aliasCreatedNew = "true"
 
-                    terraform state show azapi_resource.subscription[0] 1>$null 2>$null
-                    if ($LASTEXITCODE -eq 0) {
-                      terraform state rm azapi_resource.subscription[0] | Out-Null
-                    }
+                  terraform -chdir="$tfDir" state show azapi_resource.subscription[0] 1>$null 2>$null
+                  if ($LASTEXITCODE -eq 0) {
+                    terraform -chdir="$tfDir" state rm azapi_resource.subscription[0] | Out-Null
+                  }
 
-                    @(
-                      'create_subscription = false'
-                      'spoke_subscription_id = "' + $finalSubId + '"'
-                    ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
-                  } finally { Pop-Location }
+                  @(
+                    'create_subscription = false'
+                    'spoke_subscription_id = "' + $finalSubId + '"'
+                  ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
 
                   # 可視化待ち
                   $ok = $false
-                  for($i=1;$i -le 24;$i++){ try { az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null; $ok=$true; break } catch { Start-Sleep -Seconds 10 } }
+                  for($i=1;$i -le 24;$i++){
+                    try { az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null; $ok=$true; break } catch { Start-Sleep -Seconds 10 }
+                  }
                   if (-not $ok) { throw "Subscription not visible in ARM after retries: $finalSubId" }
                   $seen = $false
-                  for($i=1;$i -le 40;$i++){ $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv; if ($hit) { $seen=$true; break }; Start-Sleep -Seconds 15 }
+                  for($i=1;$i -le 40;$i++){
+                    $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
+                    if ($hit) { $seen=$true; break }
+                    Start-Sleep -Seconds 15
+                  }
                   if (-not $seen) { throw "Subscription not listed by 'az account list' after waiting: $finalSubId" }
                 }
               }
@@ -130,15 +160,14 @@ stages:
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
             Write-Host "Resolved finalSpokeSubscriptionId=$finalSubId (aliasCreatedNew=$aliasCreatedNew)"
 
-      # 名前を tfvars から取得、無い場合は規約で補完
+      # 名前の計算（tfvars に直書きが無い場合の補完）
       - task: PowerShell@2
         displayName: Compute resource names (for import/check)
         inputs:
           targetType: inline
           script: |
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(TF_DIR)"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
-
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
@@ -153,7 +182,6 @@ stages:
               $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
               return $t.ToLower().Trim('-')
             }
-
             $rgName   = Get-TfVar $tfvars "rg_name"
             $vnetName = Get-TfVar $tfvars "vnet_name"
             $subnet   = Get-TfVar $tfvars "subnet_name"
@@ -175,8 +203,9 @@ stages:
             Write-Host "##vso[task.setvariable variable=ComputedVnetName]$vnetName"
             Write-Host "##vso[task.setvariable variable=ComputedSubnetName]$subnet"
             Write-Host "##vso[task.setvariable variable=ComputedNsgName]$nsg"
+            Write-Host "Computed: RG=$rgName, VNET=$vnetName, Subnet=$subnet, NSG=$nsg"
 
-      # Step1: Resource Group（既存なら import してから apply）
+      # Step1: RG（既存なら import → apply）
       - task: AzureCLI@2
         displayName: Step1 - Resource Group
         env:
@@ -189,37 +218,37 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(TF_DIR)"
             az account set --subscription "$(finalSpokeSubscriptionId)"
 
             $rgName = "$(ComputedRgName)"
             $rgId = "/subscriptions/$(finalSpokeSubscriptionId)/resourceGroups/$rgName"
             Write-Host "RG target: $rgName"
 
-            Push-Location $tfDir
-            try {
-              # backend 無効で init（対話抑止）
-              terraform init -no-color -input=false -backend=false -reconfigure
+            # Clean and init (local backend)
+            if (Test-Path (Join-Path $tfDir ".terraform")) { Remove-Item -Recurse -Force (Join-Path $tfDir ".terraform") }
+            if (Test-Path (Join-Path $tfDir ".terraform.lock.hcl")) { Remove-Item -Force (Join-Path $tfDir ".terraform.lock.hcl") }
+            terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step1)" }
 
-              # 既存 RG が Azure にあるのに state に無い場合だけ import
-              $exists  = (az group exists -n $rgName)
-              $inState = terraform state list 2>$null | Select-String -SimpleMatch "azurerm_resource_group.rg"
-              if ($exists -eq 'true' -and -not $inState) {
-                Write-Host "RG exists in Azure but not in state. Importing: $rgId"
-                terraform import -no-color azurerm_resource_group.rg $rgId
-                if ($LASTEXITCODE -ne 0) { throw "terraform import (RG) failed" }
-              }
+            # Import RG if exists but not in state
+            $exists  = (az group exists -n $rgName)
+            $inState = terraform -chdir="$tfDir" state list 2>$null | Select-String -SimpleMatch "azurerm_resource_group.rg"
+            if ($exists -eq 'true' -and -not $inState) {
+              Write-Host "Import RG: $rgId"
+              terraform -chdir="$tfDir" import -no-color azurerm_resource_group.rg $rgId
+              if ($LASTEXITCODE -ne 0) { throw "terraform import (RG) failed" }
+            }
 
-              if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
-              } else {
-                terraform apply -no-color -input=false -auto-approve
-              }
-              if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
-            } finally { Pop-Location }
+            if ("$(USE_TARGETED_APPLY)" -eq "true") {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
+              if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve }
+            } else {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve
+            }
+            if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
 
-      # Step2: VNet（state を引き継いで apply）
+      # Step2: VNet
       - task: AzureCLI@2
         displayName: Step2 - VNet
         env:
@@ -232,18 +261,21 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+            $tfDir = "$(TF_DIR)"
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false -backend=false -reconfigure
-              if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
-              } else {
-                terraform apply -no-color -input=false -auto-approve
-              }
-              if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
-            } finally { Pop-Location }
+
+            if (Test-Path (Join-Path $tfDir ".terraform")) { Remove-Item -Recurse -Force (Join-Path $tfDir ".terraform") }
+            if (Test-Path (Join-Path $tfDir ".terraform.lock.hcl")) { Remove-Item -Force (Join-Path $tfDir ".terraform.lock.hcl") }
+            terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step2)" }
+
+            if ("$(USE_TARGETED_APPLY)" -eq "true") {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
+              if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve }
+            } else {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve
+            }
+            if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
 
       # Step3: Subnet + NSG
       - task: AzureCLI@2
@@ -258,23 +290,26 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+            $tfDir = "$(TF_DIR)"
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false -backend=false -reconfigure
-              if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -input=false -auto-approve `
-                  -target azurerm_network_security_group.subnet_nsg `
-                  -target azurerm_subnet.subnet `
-                  -target azurerm_subnet_network_security_group_association.subnet_assoc
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
-              } else {
-                terraform apply -no-color -input=false -auto-approve
-              }
-              if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
-            } finally { Pop-Location }
 
-      # Step4a: Peering Hub -> Spoke（Hub 側で実行）
+            if (Test-Path (Join-Path $tfDir ".terraform")) { Remove-Item -Recurse -Force (Join-Path $tfDir ".terraform") }
+            if (Test-Path (Join-Path $tfDir ".terraform.lock.hcl")) { Remove-Item -Force (Join-Path $tfDir ".terraform.lock.hcl") }
+            terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step3)" }
+
+            if ("$(USE_TARGETED_APPLY)" -eq "true") {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve `
+                -target azurerm_network_security_group.subnet_nsg `
+                -target azurerm_subnet.subnet `
+                -target azurerm_subnet_network_security_group_association.subnet_assoc
+              if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve }
+            } else {
+              terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
+
+      # Step4a: Peering Hub -> Spoke
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
         env:
@@ -287,15 +322,18 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+            $tfDir = "$(TF_DIR)"
             $hubSub = "$(hubSubscriptionId)"
             if (-not $hubSub) { throw "hubSubscriptionId variable not set" }
             az account set --subscription $hubSub
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false -backend=false -reconfigure
-              terraform apply -no-color -input=false -auto-approve
-              if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
-            } finally { Pop-Location }
+
+            if (Test-Path (Join-Path $tfDir ".terraform")) { Remove-Item -Recurse -Force (Join-Path $tfDir ".terraform") }
+            if (Test-Path (Join-Path $tfDir ".terraform.lock.hcl")) { Remove-Item -Force (Join-Path $tfDir ".terraform.lock.hcl") }
+            terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step4a)" }
+
+            terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve
+            if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
 
       # Step4b: Peering Spoke -> Hub
       - task: AzureCLI@2
@@ -310,10 +348,13 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
+            $tfDir = "$(TF_DIR)"
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false -backend=false -reconfigure
-              terraform apply -no-color -input=false -auto-approve
-              if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
-            } finally { Pop-Location }
+
+            if (Test-Path (Join-Path $tfDir ".terraform")) { Remove-Item -Recurse -Force (Join-Path $tfDir ".terraform") }
+            if (Test-Path (Join-Path $tfDir ".terraform.lock.hcl")) { Remove-Item -Force (Join-Path $tfDir ".terraform.lock.hcl") }
+            terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
+            if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step4b)" }
+
+            terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve
+            if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
