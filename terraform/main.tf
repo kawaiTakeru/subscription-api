@@ -1,6 +1,14 @@
+#############################################
+# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+#############################################
+
 terraform {
-  required_version = ">= 1.3.0"
+  required_version = ">= 1.5.0"
   required_providers {
+    azapi = {
+      source  = "azure/azapi"
+      version = "~> 1.15"
+    }
     azurerm = {
       source  = "hashicorp/azurerm"
       version = "~> 4.41"
@@ -8,10 +16,15 @@ terraform {
   }
 }
 
+provider "azapi" {
+  use_cli = true
+  use_msi = false
+}
+
 provider "azurerm" {
-  alias           = "spoke"
-  features        {}
-  subscription_id = var.spoke_subscription_id
+  alias    = "spoke"
+  features {}
+  subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
@@ -23,22 +36,73 @@ provider "azurerm" {
 }
 
 locals {
-  # 命名（tfvars をそのまま小文字化＋前後空白除去）
-  project_slug = lower(trimspace(var.project_name))
-  purpose_slug = lower(trimspace(var.purpose_name))
+  # Billing scope
+  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
+
+  # Subscription creation flow
+  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
+  effective_spoke_subscription_id = coalesce(
+    var.spoke_subscription_id,
+    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
+  )
+
+  # 命名: スラッグ化（regexreplace に一本化）
+  project_raw  = trim(var.project_name)
+  purpose_raw  = trim(var.purpose_name)
+  project_slug = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
+  purpose_slug_initial = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
+  purpose_slug = length(local.purpose_slug_initial) > 0 ? local.purpose_slug_initial : (
+    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_initial
+  )
 
   base_parts = [for p in [local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence] : p if length(p) > 0]
   base       = join("-", local.base_parts)
 
-  # 各リソース名
-  name_rg                  = "rg-${local.base}"
-  name_vnet                = "vnet-${local.base}"
-  name_subnet              = "snet-${local.base}"
-  name_nsg                 = "nsg-${local.base}"
-  name_sr_allow            = "sr-${local.base}-001"
-  name_sr_deny_internet_in = "sr-${local.base}-002"
-  name_vnetpeer_hub2spoke  = "vnetpeerhub2spoke-${local.base}"
-  name_vnetpeer_spoke2hub  = "vnetpeerspoke2hub-${local.base}"
+  # サブスクリプション命名（未指定なら規約で自動作成）
+  name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
+  name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
+
+  # 各リソース名（命名規約準拠）
+  name_rg                  = local.base != "" ? "rg-${local.base}" : null
+  name_vnet                = local.base != "" ? "vnet-${local.base}" : null
+  name_subnet              = local.base != "" ? "snet-${local.base}" : null
+  name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
+  name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
+  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
+  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+}
+
+# Subscription Alias（必要時のみ）
+resource "azapi_resource" "subscription" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = local.name_sub_alias
+  parent_id = "/"
+  body = jsonencode({
+    properties = {
+      displayName  = local.name_sub_display
+      billingScope = local.billing_scope
+      workload     = var.subscription_workload
+      additionalProperties = {
+        managementGroupId = var.management_group_id
+      }
+    }
+  })
+  timeouts {
+    create = "30m"
+    read   = "5m"
+    delete = "30m"
+  }
+}
+
+data "azapi_resource" "subscription_get" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = local.name_sub_alias
+  parent_id = "/"
+  response_export_values = ["properties.subscriptionId"]
+  depends_on = [azapi_resource.subscription]
 }
 
 # RG
@@ -119,7 +183,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   name                      = local.name_vnetpeer_hub2spoke
   resource_group_name       = var.hub_rg_name
   virtual_network_name      = var.hub_vnet_name
-  remote_virtual_network_id = "/subscriptions/${var.spoke_subscription_id}/resourceGroups/${local.name_rg}/providers/Microsoft.Network/virtualNetworks/${local.name_vnet}"
+  remote_virtual_network_id = "/subscriptions/${local.effective_spoke_subscription_id}/resourceGroups/${local.name_rg}/providers/Microsoft.Network/virtualNetworks/${local.name_vnet}"
 
   allow_forwarded_traffic = true
   allow_gateway_transit   = true
@@ -146,9 +210,53 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# 命名確認
-output "base_naming"      { value = local.base }
-output "rg_expected_name" { value = local.name_rg }
-output "vnet_expected_name" { value = local.name_vnet }
-output "spoke_rg_name"    { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"  { value = azurerm_virtual_network.vnet.name }
+# Debug outputs（Terraform が見ている値を可視化）
+output "debug_project_name" {
+  value = var.project_name
+}
+
+output "debug_purpose_name" {
+  value = var.purpose_name
+}
+
+output "debug_project_slug" {
+  value = local.project_slug
+}
+
+output "debug_purpose_slug" {
+  value = local.purpose_slug
+}
+
+output "base_naming" {
+  value       = local.base
+  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
+}
+
+output "rg_expected_name" {
+  value = local.name_rg
+}
+
+output "vnet_expected_name" {
+  value = local.name_vnet
+}
+
+output "subscription_id" {
+  value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
+  description = "Effective subscription ID"
+}
+
+output "spoke_rg_name" {
+  value = azurerm_resource_group.rg.name
+}
+
+output "spoke_vnet_name" {
+  value = azurerm_virtual_network.vnet.name
+}
+
+output "hub_to_spoke_peering_id" {
+  value = azurerm_virtual_network_peering.hub_to_spoke.id
+}
+
+output "spoke_to_hub_peering_id" {
+  value = azurerm_virtual_network_peering.spoke_to_hub.id
+}
