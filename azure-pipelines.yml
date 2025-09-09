@@ -8,7 +8,7 @@ variables:
   - name: System.Debug
     value: false
   - name: USE_TARGETED_APPLY
-    value: true   # 安定稼働後は false 推奨
+    value: true
 
 stages:
 - stage: provision_all
@@ -73,25 +73,24 @@ stages:
             Write-Host "Using var-file: $varFile"
             if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing." }
 
-            # Read naming inputs and export as pipeline variables
+            # Export naming vars for all subsequent steps (belt & suspenders)
             $pj  = Get-TfVar $varFile "project_name"
             $pu  = Get-TfVar $varFile "purpose_name"
             $env = Get-TfVar $varFile "environment_id"; if (-not $env) { $env = "prd" }
             $rc  = Get-TfVar $varFile "region_code";    if (-not $rc)  { $rc  = "jpe" }
             $seq = Get-TfVar $varFile "sequence";       if (-not $seq) { $seq = "001" }
-
             Write-Host "##vso[task.setvariable variable=tfProjectName]$pj"
             Write-Host "##vso[task.setvariable variable=tfPurposeName]$pu"
             Write-Host "##vso[task.setvariable variable=tfEnvironmentId]$env"
             Write-Host "##vso[task.setvariable variable=tfRegionCode]$rc"
             Write-Host "##vso[task.setvariable variable=tfSequence]$seq"
 
-            # read create/reuse
+            # create or reuse
             $createRaw   = Get-TfVar $varFile "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $varFile "spoke_subscription_id"
 
-            # derive alias if empty: sub-<pj>-<purpose>-<env>-<rc>-<seq>
+            # derive alias (if empty)
             $aliasFromTf = Get-TfVar $varFile "subscription_alias_name"
             if (-not $aliasFromTf) {
               $projSlug    = To-Slug $pj
@@ -110,13 +109,11 @@ stages:
               $finalSubId = $spokeIdInTf.Trim()
               Write-Host "Reuse existing subscription: $finalSubId"
             } else {
-              # Create new subscription alias (targeted apply)
               Push-Location $tfDir
               try {
                 terraform init -no-color
                 if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
 
-                # Pin alias if we computed it
                 if ($aliasFromTf) {
                   @(
                     'subscription_alias_name   = "' + $aliasFromTf + '"'
@@ -127,7 +124,6 @@ stages:
                 terraform apply -no-color -auto-approve -var-file="$varFile" -target azapi_resource.subscription[0]
                 if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                # resolve subscription id (output -> fallback alias query)
                 $jsonOut = terraform output -no-color -json 2>$null
                 if ($LASTEXITCODE -eq 0 -and $jsonOut) {
                   try {
@@ -142,33 +138,28 @@ stages:
                 }
                 if (-not $finalSubId) { throw "Could not resolve created subscription id." }
 
-                # Remove alias from state to prevent destroy later
+                # remove alias from state
                 terraform state show azapi_resource.subscription[0] 1>$null 2>$null
                 if ($LASTEXITCODE -eq 0) { terraform state rm azapi_resource.subscription[0] | Out-Null }
 
-                # Switch to reuse mode for subsequent steps
+                # switch to reuse mode for subsequent steps
                 @(
                   'create_subscription = false'
                   'spoke_subscription_id = "' + $finalSubId + '"'
                 ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
-
               } finally { Pop-Location }
 
-              # Wait for visibility (ARM + az account list)
+              # visibility waits (ARM/az)
               Write-Host "Waiting for subscription visibility (ARM/az account list)..."
               $armOk = $false
               for($i=1;$i -le 24;$i++){
-                try {
-                  az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null
-                  $armOk = $true; break
-                } catch { Start-Sleep -Seconds 10 }
+                try { az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null; $armOk = $true; break } catch { Start-Sleep -Seconds 10 }
               }
               for($i=1;$i -le 40 -and $armOk;$i++){
                 $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
                 if ($hit) { break }
                 Start-Sleep -Seconds 15
               }
-
               Write-Host "Created subscription id: $finalSubId"
             }
 
@@ -204,7 +195,6 @@ stages:
                 Write-Warning "Targeted apply failed; fallback full apply"
                 terraform apply -no-color -auto-approve -var-file="$varFile"
               }
-              # Debug: show naming outputs
               terraform output -no-color base_naming
               terraform output -no-color rg_expected_name
             } finally { Pop-Location }
