@@ -2,13 +2,13 @@
 # 命名用 基本入力（この2つを更新すれば全命名が変わります）
 # ===========================================
 project_name = "bft1"      # <PJ/案件名>
-purpose_name = "kensho1"  # <用途>
+purpose_name = "kensho1"   # <用途>
 
 # 命名の共通コンテキスト
-environment_id = "prd"    # <環境識別子>
+environment_id = "prd"     # <環境識別子>
 region         = "japaneast"
-region_code    = "jpe"    # <リージョン略号>
-sequence       = "001"    # <識別番号>
+region_code    = "jpe"     # <リージョン略号>
+sequence       = "001"     # <識別番号>
 
 # ==============================
 # Subscription (Step0)
@@ -18,12 +18,12 @@ billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 subscription_workload = "Production"
 
-# 既存サブスクリプションを再利用する場合（例）
- create_subscription   = false
- spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
+# 既存サブスクリプションを再利用する場合
+create_subscription   = false
+spoke_subscription_id = "f1a9c287-1ce5-402b-8265-f5f4dcd71b00"
 
-# 新規作成したい場合
-#create_subscription = true
+# 新規作成したい場合（使う時だけコメント解除）
+# create_subscription = true
 
 management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
