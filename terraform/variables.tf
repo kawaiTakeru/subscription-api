@@ -8,7 +8,7 @@ variable "project_name" {
   default     = ""
   validation {
     condition     = length(trimspace(var.project_name)) > 0
-    error_message = "project_name は必須です。例: bft1"
+    error_message = "project_name は必須です（例: bft1）"
   }
 }
 variable "purpose_name" {
@@ -17,7 +17,7 @@ variable "purpose_name" {
   default     = ""
   validation {
     condition     = length(trimspace(var.purpose_name)) > 0
-    error_message = "purpose_name は必須です。例: kensho1"
+    error_message = "purpose_name は必須です（例: kensho1）"
   }
 }
 variable "environment_id" {
