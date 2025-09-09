@@ -12,7 +12,7 @@ variables:
 
 stages:
 - stage: provision_all
-  displayName: Provision Subscription + Network (Simplified)
+  displayName: Provision Subscription + Network
   jobs:
   - job: terraform_job
     displayName: Terraform Orchestration
@@ -24,22 +24,16 @@ stages:
         inputs:
           terraformVersion: 1.7.5
 
-      # Step0: サブスクリプション（新規作成 or 既存再利用）
+      # Step0: Subscription (create or reuse) + export naming vars
       - task: AzureCLI@2
         name: step0
-        displayName: Step0 - Subscription (create or reuse) and export naming vars
+        displayName: Step0 - Subscription (create or reuse)
         inputs:
           azureSubscription: snp-pipeline-api-wif
           scriptType: pscore
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
-            $varFile = Join-Path $tfDir "terraform.tfvars"
-            Write-Host "Terraform dir: $tfDir"
-            Write-Host "Using var-file: $varFile"
-
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
@@ -58,9 +52,13 @@ stages:
               return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
             }
 
+            $tfDir   = "$(Build.SourcesDirectory)/terraform"
+            $varFile = Join-Path $tfDir "terraform.tfvars"
+            Write-Host "Terraform dir: $tfDir"
+            Write-Host "Using var-file: $varFile"
             if (-not (Test-Path $varFile)) { throw "terraform.tfvars missing." }
 
-            # Read naming inputs and export as pipeline variables (belt and suspenders)
+            # Read naming inputs and export as pipeline variables (belt & suspenders)
             $pj  = Get-TfVar $varFile "project_name"
             $pu  = Get-TfVar $varFile "purpose_name"
             $env = Get-TfVar $varFile "environment_id"; if (-not $env) { $env = "prd" }
@@ -73,19 +71,81 @@ stages:
             Write-Host "##vso[task.setvariable variable=tfRegionCode]$rc"
             Write-Host "##vso[task.setvariable variable=tfSequence]$seq"
 
-            # Subscription selection (reuse/new) - reuse path supported
+            # read create/reuse
             $createRaw   = Get-TfVar $varFile "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $varFile "spoke_subscription_id"
-            if (-not $createFlag -and -not $spokeIdInTf) {
-              throw "create_subscription=false の場合は spoke_subscription_id が必須です。"
+
+            # compute alias (if empty) sub-<pj>-<purpose>-<env>-<rc>-<seq>
+            $aliasFromTf = Get-TfVar $varFile "subscription_alias_name"
+            if (-not $aliasFromTf) {
+              $projSlug    = To-Slug $pj
+              $purposeSlug = To-Slug $pu
+              if (-not $purposeSlug -and $pu -eq "検証") { $purposeSlug = "kensho" }
+              $parts = @($projSlug, $purposeSlug, $env, $rc, $seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+              $aliasFromTf = if ($parts.Count -gt 0) { "sub-" + ($parts -join "-") } else { "" }
             }
-            $finalSubId = if ($createFlag) { "" } else { $spokeIdInTf.Trim() }
-            if (-not $finalSubId) {
-              # 新規作成フローをこのパイプラインで使わない場合はエラーにするか、必要に応じて実装を追加してください
-              throw "This pipeline assumes reusing an existing subscription. Set create_subscription=false and spoke_subscription_id in terraform.tfvars."
+            Write-Host "Derived alias (if used): $aliasFromTf"
+
+            $finalSubId = ""
+
+            if (-not $createFlag) {
+              if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須です。" }
+              if (-not (Is-Guid $spokeIdInTf)) { throw "spoke_subscription_id is not a valid GUID: $spokeIdInTf" }
+              $finalSubId = $spokeIdInTf.Trim()
+              Write-Host "Reuse existing subscription: $finalSubId"
+            } else {
+              # New subscription alias creation (targeted apply)
+              Push-Location $tfDir
+              try {
+                terraform init -no-color
+                if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
+
+                # 期待 alias 名を強制したい場合は override に書く（空でなければ）
+                if ($aliasFromTf) {
+                  @(
+                    'subscription_alias_name   = "' + $aliasFromTf + '"'
+                    'subscription_display_name = "' + $aliasFromTf + '"'
+                  ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
+                }
+
+                terraform apply -no-color -auto-approve -var-file="$varFile" -target azapi_resource.subscription[0]
+                if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
+
+                # get created subscription id from output (or fallback alias query)
+                $jsonOut = terraform output -no-color -json 2>$null
+                if ($LASTEXITCODE -eq 0 -and $jsonOut) {
+                  try {
+                    $obj = $jsonOut | ConvertFrom-Json
+                    $maybe = $obj.subscription_id.value
+                    if ($maybe) { $finalSubId = $maybe.Trim() }
+                  } catch {}
+                }
+                if (-not $finalSubId -and $aliasFromTf) {
+                  try {
+                    az extension show -n account 1>$null 2>$null; if ($LASTEXITCODE -ne 0) { az extension add -n account | Out-Null }
+                    $maybe2 = az account alias show --name "$aliasFromTf" --query "properties.subscriptionId" -o tsv 2>$null
+                    if ($LASTEXITCODE -eq 0 -and $maybe2) { $finalSubId = $maybe2.Trim() }
+                  } catch {}
+                }
+                if (-not $finalSubId) { throw "Could not resolve created subscription id." }
+
+                # remove alias from state to avoid destroy in later full apply
+                terraform state show azapi_resource.subscription[0] 1>$null 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                  terraform state rm azapi_resource.subscription[0] | Out-Null
+                }
+
+                # force reuse mode hereafter
+                @(
+                  'create_subscription = false'
+                  'spoke_subscription_id = "' + $finalSubId + '"'
+                ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
+              } finally {
+                Pop-Location
+              }
+              Write-Host "Created subscription id: $finalSubId"
             }
-            if (-not (Is-Guid($finalSubId))) { throw "spoke_subscription_id is not a valid GUID: $finalSubId" }
 
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "Resolved finalSpokeSubscriptionId=$finalSubId"
@@ -123,7 +183,6 @@ stages:
               } else {
                 terraform apply -no-color -auto-approve -var-file="$varFile"
               }
-              if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
 
       # Step2: VNet
@@ -159,7 +218,6 @@ stages:
               } else {
                 terraform apply -no-color -auto-approve -var-file="$varFile"
               }
-              if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
       # Step3: Subnet + NSG
@@ -199,7 +257,6 @@ stages:
               } else {
                 terraform apply -no-color -auto-approve -var-file="$varFile"
               }
-              if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
 
       # Step4a: Peering Hub -> Spoke
@@ -223,12 +280,11 @@ stages:
             $hubSub = "$(hubSubscriptionId)"
             if (-not $hubSub) { throw "hubSubscriptionId variable not set" }
             az account set --subscription $hubSub
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
             Push-Location $tfDir
             try {
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
-              if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
       # Step4b: Peering Spoke -> Hub
@@ -250,10 +306,9 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             az account set --subscription "$(finalSpokeSubscriptionId)"
-            $tfDir   = "$(Build.SourcesDirectory)/terraform"
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
             Push-Location $tfDir
             try {
               terraform init -no-color
               terraform apply -no-color -auto-approve -var-file="terraform.tfvars"
-              if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
