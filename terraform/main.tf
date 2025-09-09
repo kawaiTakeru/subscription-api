@@ -36,9 +36,6 @@ provider "azurerm" {
 }
 
 locals {
-  # Billing scope
-  billing_scope = "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}"
-
   # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
@@ -46,16 +43,21 @@ locals {
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # 命名: スラッグ化（regexreplace に一本化）
-  project_raw  = trim(var.project_name)
-  purpose_raw  = trim(var.purpose_name)
-  project_slug = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
-  purpose_slug_initial = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
-  purpose_slug = length(local.purpose_slug_initial) > 0 ? local.purpose_slug_initial : (
-    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_initial
+  # 命名: 入力正規化（前後空白除去）
+  project_raw = trimspace(var.project_name)
+  purpose_raw = trimspace(var.purpose_name)
+
+  # スラッグ化（英数字以外を除去し小文字化）
+  project_slug_base = lower(regexreplace(local.project_raw, "[^0-9A-Za-z]", ""))
+  purpose_slug_base = lower(regexreplace(local.purpose_raw, "[^0-9A-Za-z]", ""))
+
+  # フォールバック（日本語などで空になった場合）
+  project_slug = local.project_slug_base
+  purpose_slug = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
+    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  base_parts = [for p in [local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence] : p if length(p) > 0]
+  base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
   # サブスクリプション命名（未指定なら規約で自動作成）
@@ -82,11 +84,8 @@ resource "azapi_resource" "subscription" {
   body = jsonencode({
     properties = {
       displayName  = local.name_sub_display
-      billingScope = local.billing_scope
       workload     = var.subscription_workload
-      additionalProperties = {
-        managementGroupId = var.management_group_id
-      }
+      # billingScope や additionalProperties は必要に応じて
     }
   })
   timeouts {
@@ -211,52 +210,16 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 # Debug outputs（Terraform が見ている値を可視化）
-output "debug_project_name" {
-  value = var.project_name
-}
-
-output "debug_purpose_name" {
-  value = var.purpose_name
-}
-
-output "debug_project_slug" {
-  value = local.project_slug
-}
-
-output "debug_purpose_slug" {
-  value = local.purpose_slug
-}
-
-output "base_naming" {
-  value       = local.base
-  description = "命名の基底（例: bft2-kensho2-prd-jpe-001）"
-}
-
-output "rg_expected_name" {
-  value = local.name_rg
-}
-
-output "vnet_expected_name" {
-  value = local.name_vnet
-}
-
-output "subscription_id" {
-  value       = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null
-  description = "Effective subscription ID"
-}
-
-output "spoke_rg_name" {
-  value = azurerm_resource_group.rg.name
-}
-
-output "spoke_vnet_name" {
-  value = azurerm_virtual_network.vnet.name
-}
-
-output "hub_to_spoke_peering_id" {
-  value = azurerm_virtual_network_peering.hub_to_spoke.id
-}
-
-output "spoke_to_hub_peering_id" {
-  value = azurerm_virtual_network_peering.spoke_to_hub.id
-}
+output "debug_project_name"  { value = var.project_name }
+output "debug_purpose_name"  { value = var.purpose_name }
+output "debug_project_slug"  { value = local.project_slug }
+output "debug_purpose_slug"  { value = local.purpose_slug }
+output "debug_base_parts"    { value = local.base_parts }
+output "base_naming"         { value = local.base }
+output "rg_expected_name"    { value = local.name_rg }
+output "vnet_expected_name"  { value = local.name_vnet }
+output "subscription_id"     { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
