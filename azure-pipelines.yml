@@ -1,7 +1,7 @@
 parameters:
 - name: project_name
   type: string
-  default: bft   # ← ここは既定値のままでOK（Functionから来れば上書きされる）
+  default: default   # ← ここは既定値のままでOK（Functionから来れば上書きされる）
 
 trigger: none
 pr: none
