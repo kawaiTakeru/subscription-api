@@ -10,6 +10,9 @@ parameters:
 - name: project_name
   type: string
   default: bft   # Functionから来れば上書きされる
+- name: email
+  type: string
+  default: ""     # 将来拡張用。現時点は受け取りのみ。
 
 trigger: none
 pr: none
@@ -63,6 +66,7 @@ stages:
             $projectParam = "${{ parameters.project_name }}"
             Write-Host "[Step0] project_name from parameters: '$projectParam'"
             Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
+            Write-Host "[Step0] email from parameters (for future use): '${{ parameters.email }}'"
 
             # --- tfvars ユーティリティ（既存） ---
             function Get-TfVar {
