@@ -62,6 +62,7 @@ stages:
             # === 受信パラメータ（JSON→Function→Pipeline）を最優先 ===
             $projectParam = "${{ parameters.project_name }}"
             Write-Host "[Step0] project_name from parameters: '$projectParam'"
+            Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
 
             # --- tfvars ユーティリティ（既存） ---
             function Get-TfVar {
@@ -262,7 +263,7 @@ stages:
             $ErrorActionPreference='Stop'
             $subId = "$(finalSpokeSubscriptionId)"
             Write-Host "DEBUG project_name from env: $env:TF_VAR_project_name"
-            TF_VAR_environment_id: ${{ parameters.environment_id }}
+            Write-Host "DEBUG environment_id from env: $env:TF_VAR_environment_id"
 
             # 追加の短期リトライで CLI 認識とトークン取得を確認
             $ok = $false
