@@ -1,7 +1,7 @@
 parameters:
 - name: project_name
   type: string
-  default: bft   # ← ここは既定値のままでOK（Functionから来れば上書きされる）
+  default: bft   # Functionから来れば上書きされる
 
 trigger: none
 pr: none
@@ -35,6 +35,11 @@ stages:
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
+        env:
+          # Step0はTF実行する場面がある（alias作成）ので明示
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+          TF_VAR_project_name: ${{ parameters.project_name }}
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -122,6 +127,7 @@ stages:
               throw "Azure CLI did not recognize subscription within $MaxMinutes minutes: $SubId"
             }
 
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
@@ -135,7 +141,6 @@ stages:
 
             # 命名が無い場合は自動組み立て（ここで project はパラメータ最優先）
             if (-not $aliasName -or -not $dispName) {
-              # 1) PJ命名5要素のうち、project は pipeline param を優先
               $project = $projectParam
               $purpose = Get-TfVar $tfvars "purpose_name"
               $envId   = Get-TfVar $tfvars "environment_id"
@@ -143,7 +148,6 @@ stages:
               $seq     = Get-TfVar $tfvars "sequence"
               $base    = Build-Base $project $purpose $envId $rCode $seq
 
-              # 2) 以降の派生はそのまま
               if (-not $base) {
                 $rgName = Get-TfVar $tfvars "rg_name"
                 $base = Derive-Base-From-Name $rgName "rg"
@@ -171,7 +175,7 @@ stages:
             if (-not $createFlag) {
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
-              Write-Host "[Step0] Using provided existing subscription: $finalSubId"
+              Write-Host "[Step0] Using provided existing subscription: $finalSubId]"
             } else {
               if ($spokeIdInTf) {
                 Write-Warning "[Step0] create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
@@ -186,11 +190,11 @@ stages:
                   # Terraform で alias を作成（alias/display を -var で注入）
                   Push-Location $tfDir
                   try {
-                    terraform init -no-color
+                    terraform init -no-color -input=false
                     if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
 
                     $vars = @("-var", "subscription_alias_name=$aliasName", "-var", "subscription_display_name=$dispName")
-                    terraform apply -no-color -auto-approve -target azapi_resource.subscription[0] @vars
+                    terraform apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0] @vars
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
                     $subOut = Get-SubscriptionIdFromAlias $aliasName
@@ -237,7 +241,9 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -245,7 +251,9 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             $subId = "$(finalSpokeSubscriptionId)"
+            Write-Host "DEBUG project_name from env: $env:TF_VAR_project_name"
 
+            # 追加の短期リトライで CLI 認識とトークン取得を確認
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -259,15 +267,15 @@ stages:
 
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
+              terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_resource_group.rg
+                terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -input=false -auto-approve
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
@@ -280,7 +288,9 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -290,15 +300,15 @@ stages:
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
+              terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve -target azurerm_virtual_network.vnet
+                terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -input=false -auto-approve
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
@@ -311,7 +321,9 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -321,18 +333,18 @@ stages:
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
+              terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
-                terraform apply -no-color -auto-approve `
+                terraform apply -no-color -input=false -auto-approve `
                   -target azurerm_network_security_group.subnet_nsg `
                   -target azurerm_subnet.subnet `
                   -target azurerm_subnet_network_security_group_association.subnet_assoc
                 if ($LASTEXITCODE -ne 0) {
                   Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -auto-approve
+                  terraform apply -no-color -input=false -auto-approve
                 }
               } else {
-                terraform apply -no-color -auto-approve
+                terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
@@ -344,7 +356,9 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加（モジュールが参照するなら）
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -356,12 +370,12 @@ stages:
             az account set --subscription $hubSub
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke -> Hub
+      # Step4b: Peering Spoke->Hub
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
         env:
@@ -369,7 +383,9 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加（モジュールが参照するなら）
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -379,7 +395,7 @@ stages:
             az account set --subscription "$(finalSpokeSubscriptionId)"
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
-              terraform init -no-color
-              terraform apply -no-color -auto-approve
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
             } finally { Pop-Location }
