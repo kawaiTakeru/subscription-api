@@ -1,4 +1,12 @@
 parameters:
+- name: environment_id
+  type: string
+  default: dev
+  values:
+  - cmn
+  - dev
+  - stg
+  - prd
 - name: project_name
   type: string
   default: bft   # Functionから来れば上書きされる
@@ -40,6 +48,7 @@ stages:
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -242,6 +251,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -252,6 +262,7 @@ stages:
             $ErrorActionPreference='Stop'
             $subId = "$(finalSpokeSubscriptionId)"
             Write-Host "DEBUG project_name from env: $env:TF_VAR_project_name"
+            TF_VAR_environment_id: ${{ parameters.environment_id }}
 
             # 追加の短期リトライで CLI 認識とトークン取得を確認
             $ok = $false
@@ -289,6 +300,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -322,6 +334,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -357,6 +370,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -384,6 +398,7 @@ stages:
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
