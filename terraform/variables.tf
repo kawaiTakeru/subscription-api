@@ -5,7 +5,7 @@
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
-  default     = ""
+
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
