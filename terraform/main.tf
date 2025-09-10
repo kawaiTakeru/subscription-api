@@ -38,7 +38,7 @@ provider "azurerm" {
 
 locals {
   # Subscription creation flow
-  need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
+  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
@@ -82,18 +82,20 @@ locals {
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # Subscription Alias properties 組み立て（management_group_id があれば追加プロパティに付与）
+  # Subscription Alias properties（型整合のため条件付きマージ）
   sub_properties_base = {
-    displayName = local.name_sub_display
-    workload    = var.subscription_workload
+    displayName  = local.name_sub_display
+    workload     = var.subscription_workload
     billingScope = local.billing_scope
   }
 
-  sub_properties = var.management_group_id != "" ? merge(local.sub_properties_base, {
+  sub_properties_extra = var.management_group_id != "" ? {
     additionalProperties = {
       managementGroupId = var.management_group_id
     }
-  }) : local.sub_properties_base
+  } : {}
+
+  sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 }
 
 # Subscription Alias（必要時のみ）
