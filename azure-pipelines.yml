@@ -53,7 +53,9 @@ stages:
             Write-Host "##vso[task.setvariable variable=HasCleanFunc]true"
 
       # Step0: Subscription（create or reuse）
-      # alias 未指定でも命名5変数から自動算出。ARM 反映のみ待機し、az account list の反映待ちは削除。
+      # - alias 未指定でも命名5変数から自動算出
+      # - 取得した Subscription ID は必ず CLI から取得（terraform output は使用しない）
+      # - $LASTEXITCODE を 0 に戻して正常終了を保証
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
@@ -93,6 +95,16 @@ stages:
               $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
               return ($parts -join "-")
             }
+            function Get-SubscriptionIdFromAlias([string]$Alias) {
+              if (-not $Alias) { return "" }
+              foreach ($cmd in @(
+                { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
+                { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
+              )) {
+                try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {}
+              }
+              return ""
+            }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
@@ -105,6 +117,7 @@ stages:
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
+            # 未指定なら base から alias/display を自動算出（Terraform と同じ規則）
             if (-not $aliasName -or -not $dispName) {
               $project = Get-TfVar $tfvars "project_name"
               $purpose = Get-TfVar $tfvars "purpose_name"
@@ -116,15 +129,6 @@ stages:
               if (-not $dispName  -and $base) { $dispName  = "sub-$base" }
             }
             Write-Host "[Step0] createFlag=$createFlag, spokeIdInTf='$spokeIdInTf', alias='$aliasName'"
-
-            function Get-SubscriptionIdFromAlias([string]$Alias) {
-              if (-not $Alias) { return "" }
-              foreach ($cmd in @(
-                { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
-                { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
-              )) { try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {} }
-              return ""
-            }
 
             $finalSubId = ""
             $aliasCreatedNew = "false"
@@ -138,6 +142,7 @@ stages:
                 Write-Warning "[Step0] create_subscription=true ですが spoke_subscription_id が指定済。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
+                # 既存 alias が同名で存在すれば再利用
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   $finalSubId = $reuseId
@@ -158,19 +163,20 @@ stages:
                   terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0] @vars
                   if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                  $subOut = terraform -chdir="$tfDir" output -raw subscription_id 2>$null
-                  if ($LASTEXITCODE -ne 0 -or -not $subOut) { $subOut = Get-SubscriptionIdFromAlias $aliasName }
-                  if (-not $subOut) { throw "Could not resolve subscription id after creation." }
-                  $finalSubId = $subOut.Trim()
+                  # 作成した alias から ID を取得（terraform output には依存しない）
+                  $finalSubId = Get-SubscriptionIdFromAlias $aliasName
+                  if (-not $finalSubId) { throw "Could not resolve subscription id after alias creation." }
                   $aliasCreatedNew = "true"
                   Write-Host "[Step0] created subscription id: $finalSubId"
 
+                  # alias リソースは state から外す（以降は既存再利用運用）
                   terraform -chdir="$tfDir" state show azapi_resource.subscription[0] 1>$null 2>$null
                   if ($LASTEXITCODE -eq 0) {
                     terraform -chdir="$tfDir" state rm azapi_resource.subscription[0] | Out-Null
                     Write-Host "[Step0] removed alias resource from state"
                   }
 
+                  # 次回以降のために override を書き出し
                   @(
                     'create_subscription = false'
                     'spoke_subscription_id = "' + $finalSubId + '"'
@@ -196,6 +202,10 @@ stages:
             }
 
             if (-not $finalSubId) { throw "final subscription id could not be resolved." }
+
+            # ここまで来たら戻りコードに影響しうるコマンド実行は無しにする
+            $global:LASTEXITCODE = 0
+
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
