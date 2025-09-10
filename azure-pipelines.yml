@@ -1,7 +1,7 @@
 parameters:
 - name: project_name
   type: string
-  default: bft
+  default: bft   # ← ここは既定値のままでOK（Functionから来れば上書きされる）
 
 trigger: none
 pr: none
@@ -13,9 +13,9 @@ variables:
   - name: System.Debug
     value: true
   - name: USE_TARGETED_APPLY
-    value: true   # 安定稼働後は false 推奨
+    value: true
   - name: azureServiceConnection
-    value: snp-pipeline-api-wif   # 実在する Service Connection 名に合わせて変更可
+    value: snp-pipeline-api-wif
 
 stages:
 - stage: provision_all
@@ -45,7 +45,11 @@ stages:
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             Write-Host "[Step0] Terraform dir: $tfDir"
 
-            # --- tfvars ユーティリティ ---
+            # === 受信パラメータ（JSON→Function→Pipeline）を最優先 ===
+            $projectParam = "${{ parameters.project_name }}"
+            Write-Host "[Step0] project_name from parameters: '$projectParam'"
+
+            # --- tfvars ユーティリティ（既存） ---
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
@@ -121,7 +125,7 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # 入力値取得
+            # 入力値取得（tfvars からは project_name を取らない）
             $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
             $dispName    = Get-TfVar $tfvars "subscription_display_name"
             $createRaw   = Get-TfVar $tfvars "create_subscription"
@@ -129,27 +133,25 @@ stages:
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
 
-            # 命名が無い場合は自動組み立て（決定的に）
+            # 命名が無い場合は自動組み立て（ここで project はパラメータ最優先）
             if (-not $aliasName -or -not $dispName) {
-              # 1) PJ命名5要素から
-              $project = Get-TfVar $tfvars "project_name"
+              # 1) PJ命名5要素のうち、project は pipeline param を優先
+              $project = $projectParam
               $purpose = Get-TfVar $tfvars "purpose_name"
               $envId   = Get-TfVar $tfvars "environment_id"
               $rCode   = Get-TfVar $tfvars "region_code"
               $seq     = Get-TfVar $tfvars "sequence"
               $base    = Build-Base $project $purpose $envId $rCode $seq
 
-              # 2) RG名から派生
+              # 2) 以降の派生はそのまま
               if (-not $base) {
                 $rgName = Get-TfVar $tfvars "rg_name"
                 $base = Derive-Base-From-Name $rgName "rg"
               }
-              # 3) VNet名から派生
               if (-not $base) {
                 $vnetName = Get-TfVar $tfvars "vnet_name"
                 $base = Derive-Base-From-Name $vnetName "vnet"
               }
-              # 4) 最終フォールバック（日時）
               if (-not $base) {
                 $ts = Get-Date -Format "yyyyMMddHHmmss"
                 $base = "gen-$ts"
@@ -191,7 +193,6 @@ stages:
                     terraform apply -no-color -auto-approve -target azapi_resource.subscription[0] @vars
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
-                    # ID は alias から取得（output は補助）
                     $subOut = Get-SubscriptionIdFromAlias $aliasName
                     if (-not $subOut) {
                       $subOut = terraform output -raw subscription_id 2>$null
@@ -200,14 +201,12 @@ stages:
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
-                    # state から alias を除去（フル適用で破壊されないように）
                     terraform state show azapi_resource.subscription[0] 1>$null 2>$null
                     if ($LASTEXITCODE -eq 0) {
                       Write-Host "[Step0] Removing alias resource from state."
                       terraform state rm azapi_resource.subscription[0] | Out-Null
                     }
 
-                    # 次回以降のために override を書き出し
                     @(
                       'create_subscription = false'
                       'spoke_subscription_id = "' + $finalSubId + '"'
@@ -215,7 +214,6 @@ stages:
                     Write-Host "[Step0] override.auto.tfvars written."
                   } finally { Pop-Location }
 
-                  # 伝播待ち（ARM → CLI）
                   Wait-For-ARM $finalSubId 240
                   Wait-For-AzCliVisibility $finalSubId 10
                 }
@@ -229,6 +227,7 @@ stages:
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
             Write-Host "[Step0] Resolved finalSpokeSubscriptionId=$finalSubId (aliasCreatedNew=$aliasCreatedNew)"
+            Write-Host "[Step0] Naming base uses parameter project_name='$projectParam'"
 
       # Step1: RG
       - task: AzureCLI@2
@@ -238,6 +237,7 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -246,7 +246,6 @@ stages:
             $ErrorActionPreference='Stop'
             $subId = "$(finalSpokeSubscriptionId)"
 
-            # 追加の短期リトライで CLI 認識とトークン取得を確認
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -281,6 +280,7 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -311,6 +311,7 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -343,6 +344,7 @@ stages:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加（モジュールが参照するなら）
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -367,6 +369,7 @@ stages:
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}      # ← ★追加（モジュールが参照するなら）
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
