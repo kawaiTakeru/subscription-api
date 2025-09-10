@@ -53,6 +53,7 @@ stages:
             Write-Host "##vso[task.setvariable variable=HasCleanFunc]true"
 
       # Step0: Subscription（create or reuse）
+      # alias 未指定でも命名5変数から自動算出して作成/再利用できるように修正
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
@@ -78,16 +79,43 @@ stages:
               if (Test-Path $td) { Remove-Item -Recurse -Force $td }
               if (Test-Path $lk) { Remove-Item -Force $lk }
             }
+            function Slugify([string]$s) {
+              if (-not $s) { return "" }
+              $t = $s.Trim().ToLower()
+              $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
+              return $t
+            }
+            function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
+              $p1 = Slugify $project
+              $p2raw = Slugify $purpose
+              # 「検証」の場合は "kensho" にフォールバック（main.tf と同等）
+              $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
+              $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+              return ($parts -join "-")
+            }
 
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
             $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
+            $dispName    = Get-TfVar $tfvars "subscription_display_name"
             $createRaw   = Get-TfVar $tfvars "create_subscription"
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
+
+            # 未指定なら base から alias/display を自動算出（Terraform と同じ規則）
+            if (-not $aliasName -or -not $dispName) {
+              $project = Get-TfVar $tfvars "project_name"
+              $purpose = Get-TfVar $tfvars "purpose_name"
+              $envId   = Get-TfVar $tfvars "environment_id"
+              $rCode   = Get-TfVar $tfvars "region_code"
+              $seq     = Get-TfVar $tfvars "sequence"
+              $base    = Build-Base $project $purpose $envId $rCode $seq
+              if (-not $aliasName -and $base) { $aliasName = "sub-$base" }
+              if (-not $dispName  -and $base) { $dispName  = "sub-$base" }
+            }
 
             function Get-SubscriptionIdFromAlias([string]$Alias) {
               if (-not $Alias) { return "" }
@@ -109,47 +137,60 @@ stages:
                 Write-Warning "create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
+                # 既存 alias が同名で存在すれば再利用
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
                   $finalSubId = $reuseId
                 } else {
-                  if (-not $aliasName) { throw "subscription_alias_name is empty; cannot create." }
+                  if (-not $aliasName) {
+                    throw "alias を自動算出できませんでした。tfvars の命名入力（project_name/purpose_name/environment_id/region_code/sequence）を確認してください。"
+                  }
+                  # Terraform で alias を作成
                   Clean-TF $tfDir
                   terraform -chdir="$tfDir" init -no-color -input=false -backend=false -reconfigure
                   if ($LASTEXITCODE -ne 0) { throw "terraform init failed (Step0)" }
 
-                  terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0]
+                  # display/alias 名を -var で注入（tfvars 未記載でも値を渡す）
+                  $vars = @()
+                  if ($aliasName) { $vars += "-var"; $vars += "subscription_alias_name=$aliasName" }
+                  if ($dispName)  { $vars += "-var"; $vars += "subscription_display_name=$dispName"  }
+
+                  terraform -chdir="$tfDir" apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0] @vars
                   if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
+                  # 作成結果の取得（output → fallback で REST 確認）
                   $subOut = terraform -chdir="$tfDir" output -raw subscription_id 2>$null
                   if ($LASTEXITCODE -ne 0 -or -not $subOut) { $subOut = Get-SubscriptionIdFromAlias $aliasName }
                   if (-not $subOut) { throw "Could not resolve subscription id after creation." }
                   $finalSubId = $subOut.Trim()
                   $aliasCreatedNew = "true"
 
+                  # alias リソースは state から外す（以降は既存再利用運用）
                   terraform -chdir="$tfDir" state show azapi_resource.subscription[0] 1>$null 2>$null
                   if ($LASTEXITCODE -eq 0) {
                     terraform -chdir="$tfDir" state rm azapi_resource.subscription[0] | Out-Null
                   }
 
+                  # 次回以降のために override を書き出し
                   @(
                     'create_subscription = false'
                     'spoke_subscription_id = "' + $finalSubId + '"'
                   ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
 
-                  # 可視化待ち
+                  # ARM/az への伝播待ち
                   $ok = $false
                   for($i=1;$i -le 24;$i++){
                     try { az rest --method get --url "https://management.azure.com/subscriptions/$finalSubId?api-version=2020-01-01" | Out-Null; $ok=$true; break } catch { Start-Sleep -Seconds 10 }
                   }
                   if (-not $ok) { throw "Subscription not visible in ARM after retries: $finalSubId" }
+
                   $seen = $false
                   for($i=1;$i -le 40;$i++){
                     $hit = az account list --refresh --query "[?id=='$finalSubId']" -o tsv
                     if ($hit) { $seen=$true; break }
                     Start-Sleep -Seconds 15
                   }
-                  if (-not $seen) { throw "Subscription not listed by 'az account list' after waiting: $finalSubId" }
+                  if (-not $seen) { Write-Warning "Subscription not listed by 'az account list' yet: $finalSubId" }
                 }
               }
             }
@@ -168,36 +209,47 @@ stages:
           script: |
             $tfDir = "$(TF_DIR)"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
+
             function Get-TfVar {
               param([string]$Path,[string]$Key)
+              if (-not (Test-Path $Path)) { return "" }
               $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
               if (-not $line) { return "" }
               $val = $line -replace "^\s*$Key\s*=\s*", ""
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
             }
-            function To-Slug([string]$s) {
+            function Slugify([string]$s) {
               if (-not $s) { return "" }
-              $t = $s.Trim()
-              $t = [regex]::Replace($t, "[^0-9A-Za-z]+", "-")
-              return $t.ToLower().Trim('-')
+              $t = $s.Trim().ToLower()
+              $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
+              return $t
             }
+            function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
+              $p1 = Slugify $project
+              $p2raw = Slugify $purpose
+              $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
+              $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+              return ($parts -join "-")
+            }
+
             $rgName   = Get-TfVar $tfvars "rg_name"
             $vnetName = Get-TfVar $tfvars "vnet_name"
             $subnet   = Get-TfVar $tfvars "subnet_name"
             $nsg      = Get-TfVar $tfvars "nsg_name"
 
             if (-not $rgName -or -not $vnetName -or -not $subnet -or -not $nsg) {
-              $project    = To-Slug (Get-TfVar $tfvars 'project_name')
-              $purpose    = To-Slug (Get-TfVar $tfvars 'purpose_name')
-              $envId      = (Get-TfVar $tfvars 'environment_id')
-              $regionCode = (Get-TfVar $tfvars 'region_code')
-              $seq        = (Get-TfVar $tfvars 'sequence')
+              $project    = Get-TfVar $tfvars 'project_name'
+              $purpose    = Get-TfVar $tfvars 'purpose_name'
+              $envId      = Get-TfVar $tfvars 'environment_id'
+              $regionCode = Get-TfVar $tfvars 'region_code'
+              $seq        = Get-TfVar $tfvars 'sequence'
+              $base       = Build-Base $project $purpose $envId $regionCode $seq
+              if (-not $rgName)   { $rgName   = "rg-$base" }
+              if (-not $vnetName) { $vnetName = "vnet-$base" }
+              if (-not $subnet)   { $subnet   = "snet-$base" }
+              if (-not $nsg)      { $nsg      = "nsg-$base" }
             }
-            if (-not $rgName)   { $rgName   = "rg-$project-$purpose-$envId-$regionCode-$seq" }
-            if (-not $vnetName) { $vnetName = "vnet-$project-$purpose-$envId-$regionCode-$seq" }
-            if (-not $subnet)   { $subnet   = "snet-$project-$purpose-$envId-$regionCode-$seq" }
-            if (-not $nsg)      { $nsg      = "nsg-$project-$purpose-$envId-$regionCode-$seq" }
 
             Write-Host "##vso[task.setvariable variable=ComputedRgName]$rgName"
             Write-Host "##vso[task.setvariable variable=ComputedVnetName]$vnetName"
