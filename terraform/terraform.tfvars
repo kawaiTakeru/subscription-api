@@ -16,9 +16,9 @@ region = "japaneast"         # Azure の実リージョン（location）。変�
 # ==============================
 # Subscription (Step0) 作成/再利用の制御
 # ==============================
-create_subscription   = true                       # 新規作成ならtrue
-#create_subscription   = false                       # 既存再利用なら false
-#spoke_subscription_id = "7cbfacbd-3c24-4051-8c08-f8b1a1145a3e"  # 既存 Spoke の Subscription ID
+#create_subscription   = true                       # 新規作成ならtrue
+create_subscription   = false                       # 既存再利用なら false
+spoke_subscription_id = "fe2fa224-cf83-435a-b430-f538a96abb2b"  # 既存 Spoke の Subscription ID
 subscription_workload = "Production"                # 新規作成時のみ利用（Alias の workload）
 
 # 課金系（現行 main.tf では未参照。将来の拡張向けに残置）
