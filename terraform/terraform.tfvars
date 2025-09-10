@@ -16,9 +16,9 @@ region = "japaneast"
 # ==============================
 # Subscription (Step0) 作成/再利用の制御
 # ==============================
-#create_subscription   = true
-create_subscription   = false
-spoke_subscription_id = "fe2fa224-cf83-435a-b430-f538a96abb2b"
+create_subscription   = true
+#create_subscription   = false
+#spoke_subscription_id = "fe2fa224-cf83-435a-b430-f538a96abb2b"
 subscription_workload = "Production"
 
 # 課金系（現行 main.tf では未参照。将来の拡張向けに残置）
