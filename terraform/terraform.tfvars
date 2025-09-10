@@ -3,7 +3,7 @@
 # base = <project>-<purpose>-<environment_id>-<region_code>-<sequence>
 # ===========================================
 project_name   = "bft"      # PJ/案件名（小文字・一部記号はハイフンにスラッグ化）
-purpose_name   = "kensho5"   # 用途（"検証" の場合は "kensho" にフォールバック）
+purpose_name   = "kensho6"   # 用途（"検証" の場合は "kensho" にフォールバック）
 environment_id = "prd"       # 環境識別子（例: dev/stg/prd）
 region_code    = "jpe"       # リージョン略号（名前のみで使用、region と整合させる）
 sequence       = "001"       # 識別番号（ゼロパディング推奨）
