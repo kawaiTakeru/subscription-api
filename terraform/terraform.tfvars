@@ -3,7 +3,7 @@
 # base = <project>-<purpose>-<environment_id>-<region_code>-<sequence>
 # ===========================================
 # project_name is now provided via TF_VAR_project_name from Pipeline
-purpose_name   = "kensho6"   # 用途（"検証" の場合は "kensho" にフォールバック）
+purpose_name   = "json"   # 用途（"検証" の場合は "kensho" にフォールバック）
 environment_id = "prd"       # 環境識別子（例: dev/stg/prd）
 region_code    = "jpe"       # リージョン略号（名前のみで使用、region と整合させる）
 sequence       = "001"       # 識別番号（ゼロパディング推奨）
