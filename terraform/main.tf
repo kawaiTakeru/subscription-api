@@ -5,8 +5,6 @@
 terraform {
   required_version = ">= 1.5.0"
 
-  # ここから backend ブロックを削除しました（ローカル state 運用のため）
-
   required_providers {
     azapi = {
       source  = "azure/azapi"
@@ -25,8 +23,8 @@ provider "azapi" {
 }
 
 provider "azurerm" {
-  alias    = "spoke"
-  features {}
+  alias           = "spoke"
+  features        {}
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
@@ -40,7 +38,7 @@ provider "azurerm" {
 
 locals {
   # Subscription creation flow
-  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
+  need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
@@ -51,7 +49,6 @@ locals {
   purpose_raw = trimspace(var.purpose_name)
 
   # スラッグ化（regex を使わない単純置換 + 小文字化）
-  # 入力は英数字想定。必要最低限の安全化のみ行う。
   project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
   purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
@@ -64,19 +61,39 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
+  # リソース名
+  name_rg                   = local.base != "" ? "rg-${local.base}" : null
+  name_vnet                 = local.base != "" ? "vnet-${local.base}" : null
+  name_subnet               = local.base != "" ? "snet-${local.base}" : null
+  name_nsg                  = local.base != "" ? "nsg-${local.base}" : null
+  name_sr_allow             = local.base != "" ? "sr-${local.base}-001" : null
+  name_sr_deny_internet_in  = local.base != "" ? "sr-${local.base}-002" : null
+  name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub   = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+
   # サブスクリプション命名（未指定なら規約で自動作成）
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
   name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
-  # 各リソース名（命名規約準拠）
-  name_rg                  = local.base != "" ? "rg-${local.base}" : null
-  name_vnet                = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet              = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
-  name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
-  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+  # Billing Scope（MCA: /providers/Microsoft.Billing/billingAccounts/{}/billingProfiles/{}/invoiceSections/{}）
+  billing_scope = (
+    var.billing_account_name != "" &&
+    var.billing_profile_name != "" &&
+    var.invoice_section_name != ""
+  ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
+
+  # Subscription Alias properties 組み立て（management_group_id があれば追加プロパティに付与）
+  sub_properties_base = {
+    displayName = local.name_sub_display
+    workload    = var.subscription_workload
+    billingScope = local.billing_scope
+  }
+
+  sub_properties = var.management_group_id != "" ? merge(local.sub_properties_base, {
+    additionalProperties = {
+      managementGroupId = var.management_group_id
+    }
+  }) : local.sub_properties_base
 }
 
 # Subscription Alias（必要時のみ）
@@ -85,13 +102,18 @@ resource "azapi_resource" "subscription" {
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = local.name_sub_alias
   parent_id = "/"
+
   body = jsonencode({
-    properties = {
-      displayName  = local.name_sub_display
-      workload     = var.subscription_workload
-      # billingScope や additionalProperties は必要に応じて
-    }
+    properties = local.sub_properties
   })
+
+  lifecycle {
+    precondition {
+      condition     = local.need_create_subscription ? local.billing_scope != null : true
+      error_message = "create_subscription=true の場合、billing_account_name / billing_profile_name / invoice_section_name を設定してください（billingScope 必須）。"
+    }
+  }
+
   timeouts {
     create = "30m"
     read   = "5m"
