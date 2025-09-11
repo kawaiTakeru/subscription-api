@@ -1,11 +1,9 @@
 #############################################
 # Subscription (Stage0 相当)
 #############################################
-# 命名規約用 変数（<識別子>-<PJ>-<用途>-<環境>-<リージョン略>-<通番>）
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
-
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
@@ -169,13 +167,13 @@ variable "allowed_port" {
   default     = 3389
 }
 
-# 追加: Subnet の <用途> に vnet_type を使用（空も許容しつつ public/private を想定）
+# Subnet の命名で用途欄に使用（public/private）
 variable "vnet_type" {
-  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private。空も可。"
+  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private。空でも可（CIで未指定のときに落ちないため）"
   type        = string
   default     = ""
   validation {
-    condition     = var.vnet_type == "" || contains(["public","private"], lower(trimspace(var.vnet_type)))
+    condition     = var.vnet_type == "" || contains(["public", "private"], lower(trimspace(var.vnet_type)))
     error_message = "vnet_type は ''（空）または 'public' / 'private' を指定してください。"
   }
 }
