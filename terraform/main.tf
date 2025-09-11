@@ -68,8 +68,13 @@ locals {
   name_nsg                  = local.base != "" ? "nsg-${local.base}" : null
   name_sr_allow             = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in  = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub   = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+
+  # VNet Peering（用途の箇所を hubtospoke/spoketohub にし、リージョンは含めない）
+  # 形式:
+  #   perr-<project>-hubtospoke-<environment_id>-<sequence>
+  #   perr-<project>-spoketohub-<environment_id>-<sequence>
+  name_vnetpeer_hub2spoke   = local.project_slug != "" ? "perr-${local.project_slug}-hubtospoke-${var.environment_id}-${var.sequence}" : null
+  name_vnetpeer_spoke2hub   = local.project_slug != "" ? "perr-${local.project_slug}-spoketohub-${var.environment_id}-${var.sequence}" : null
 
   # サブスクリプション命名（未指定なら規約で自動作成）
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
