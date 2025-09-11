@@ -64,15 +64,14 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             Write-Host "[Step0] Terraform dir: $tfDir"
 
-            # 受信パラメータ
+            # === 受信パラメータ ===
             $projectParam = "${{ parameters.project_name }}"
-            Write-Host "[Step0] project_name from parameters: '$projectParam'"
-            Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
-            Write-Host "[Step0] vnet_type from env: $env:TF_VAR_vnet_type"
+            Write-Host "[Step0] project_name: '$projectParam'"
+            Write-Host "[Step0] environment_id: $env:TF_VAR_environment_id"
+            Write-Host "[Step0] vnet_type: $env:TF_VAR_vnet_type"
 
             function Get-TfVar {
               param([string]$Path,[string]$Key)
@@ -97,12 +96,6 @@ stages:
               $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
               return ($parts -join "-")
             }
-            function Derive-Base-From-Name([string]$name,[string]$prefix) {
-              if (-not $name) { return "" }
-              $n = $name
-              if ($prefix -and $n.ToLower().StartsWith(($prefix + "-"))) { $n = $n.Substring($prefix.Length + 1) }
-              return Slugify $n
-            }
             function Get-SubscriptionIdFromAlias([string]$Alias) {
               if (-not $Alias) { return "" }
               foreach ($cmd in @(
@@ -116,8 +109,8 @@ stages:
             function Wait-For-ARM([string]$SubId, [int]$Seconds = 240) {
               $tries = [Math]::Ceiling($Seconds / 10)
               for ($i=1; $i -le $tries; $i++) {
-                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null; Write-Host "[Step0] ARM visibility confirmed"; return }
-                catch { Write-Host "[Step0] waiting ARM visibility... ($i/$tries)"; Start-Sleep -Seconds 10 }
+                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null; Write-Host "[Step0] ARM OK"; return }
+                catch { Write-Host "[Step0] waiting ARM... ($i/$tries)"; Start-Sleep -Seconds 10 }
               }
               throw "Subscription not visible in ARM after $Seconds seconds: $SubId"
             }
@@ -127,8 +120,8 @@ stages:
                 $hit = az account list --refresh --query "[?id=='$SubId'].id" -o tsv
                 $tokenOk = $false
                 try { az account get-access-token --subscription $SubId -o none 2>$null; if ($LASTEXITCODE -eq 0) { $tokenOk = $true } } catch {}
-                if ($hit -and $tokenOk) { Write-Host "[Step0] Azure CLI visibility confirmed"; return }
-                Write-Host "[Step0] waiting Azure CLI visibility... ($i/$max)"
+                if ($hit -and $tokenOk) { Write-Host "[Step0] az cli OK"; return }
+                Write-Host "[Step0] waiting az cli... ($i/$max)"
                 Start-Sleep -Seconds 15
               }
               throw "Azure CLI did not recognize subscription within $MaxMinutes minutes: $SubId"
@@ -143,10 +136,8 @@ stages:
             $createFlag  = if ($createRaw -match '^(?i:true|1)$') { $true } else { $false }
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
-
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            # 命名を補完
             if (-not $aliasName -or -not $dispName) {
               $purpose = Get-TfVar $tfvars "purpose_name"
               $envId   = Get-TfVar $tfvars "environment_id"
@@ -159,7 +150,7 @@ stages:
 
             $finalSubId = ""
             if (-not $createFlag) {
-              if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
+              if (-not $spokeIdInTf) { throw "create_subscription=false には spoke_subscription_id が必要" }
               $finalSubId = $spokeIdInTf
             } else {
               if ($spokeIdInTf) {
@@ -174,7 +165,7 @@ stages:
                     terraform init -no-color -input=false
                     $vars = @("-var","subscription_alias_name=$aliasName","-var","subscription_display_name=$dispName")
                     terraform apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0] @vars
-                    if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
+                    if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias) failed" }
                   } finally { Pop-Location }
                   $finalSubId = Get-SubscriptionIdFromAlias $aliasName
                   if (-not $finalSubId) { throw "Could not resolve subscription id after creation." }
@@ -212,8 +203,6 @@ stages:
             $ErrorActionPreference='Stop'
             $subId = $env:ARM_SUBSCRIPTION_ID
             if (-not $subId) { throw "finalSpokeSubscriptionId is empty. Check Step0." }
-            Write-Host "DEBUG SUBSCRIPTION: $subId"
-
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -224,7 +213,6 @@ stages:
               Start-Sleep -Seconds 10
             }
             if (-not $ok) { throw "Azure CLI is not ready for subscription: $subId" }
-
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
               terraform init -no-color -input=false
@@ -313,10 +301,10 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
 
-      # Step4a: Peering Hub -> Spoke（public のときのみ実行）
+      # Step4a: Peering Hub -> Spoke（private のときのみ実行）
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
-        condition: and(succeeded(), eq('${{ parameters.vnet_type }}','public'))
+        condition: and(succeeded(), eq('${{ parameters.vnet_type }}','private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -343,10 +331,10 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke->Hub（public のときのみ実行）
+      # Step4b: Peering Spoke->Hub（private のときのみ実行）
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
-        condition: and(succeeded(), eq('${{ parameters.vnet_type }}','public'))
+        condition: and(succeeded(), eq('${{ parameters.vnet_type }}','private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
