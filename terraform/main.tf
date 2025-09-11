@@ -61,11 +61,15 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # 既存リソース名
+  # 既存リソース名（RG/VNet は従来どおり purpose を含む base）
   name_rg                 = local.base != "" ? "rg-${local.base}" : null
   name_vnet               = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet             = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                = local.base != "" ? "nsg-${local.base}" : null
+
+  # 通常サブネット・通常NSGの命名を vnet_type を含む形式に変更
+  # <識別子>-<PJ/案件名>-<vnettype>-<環境識別子>-<リージョン略号>-<識別番号>
+  name_subnet             = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_nsg                = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
   name_sr_allow           = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
@@ -212,7 +216,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
-# 既存 NSG（業務用）
+# 既存 NSG（業務用）: 命名が vnet_type を含む形式に変更済み
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -267,7 +271,7 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   }
 }
 
-# Subnet（業務用・命名規則適用）
+# Subnet（業務用・命名が vnet_type を含む形式に変更済み）
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -293,14 +297,14 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
-# NSG Association（業務用 Subnet）←既存のまま
+# NSG Association（業務用 Subnet）
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
-# NSG Association（Bastion Subnet）←新規 NSG に付け替え
+# NSG Association（Bastion Subnet）
 resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.bastion_subnet.id
