@@ -153,6 +153,17 @@ variable "vnet_number_of_ips" {
 #############################################
 # Subnet + NSG (Stage3)
 #############################################
+
+# Subnet の命名において「用途」の代わりに使う種別（public / private）
+variable "vnet_type" {
+  description = "Subnet 命名で用途部に入れる VNet 種別（public または private）"
+  type        = string
+  validation {
+    condition     = contains(["public", "private"], lower(trimspace(var.vnet_type)))
+    error_message = "vnet_type は public または private を指定してください。"
+  }
+}
+
 variable "subnet_number_of_ips" {
   description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
   type        = number
