@@ -4,23 +4,13 @@
 
 terraform {
   required_version = ">= 1.5.0"
-
   required_providers {
-    azapi = {
-      source  = "azure/azapi"
-      version = "~> 1.15"
-    }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.41"
-    }
+    azapi  = { source = "azure/azapi",    version = "~> 1.15" }
+    azurerm = { source = "hashicorp/azurerm", version = "~> 4.41" }
   }
 }
 
-provider "azapi" {
-  use_cli = true
-  use_msi = false
-}
+provider "azapi" { use_cli = true, use_msi = false }
 
 provider "azurerm" {
   alias           = "spoke"
@@ -37,77 +27,56 @@ provider "azurerm" {
 }
 
 locals {
-  # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
-  effective_spoke_subscription_id = coalesce(
-    var.spoke_subscription_id,
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
-  )
+  effective_spoke_subscription_id = coalesce(var.spoke_subscription_id, try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, ""))
 
-  # 命名: 入力正規化（前後空白除去）
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
-  # スラッグ化（regex を使わない単純置換 + 小文字化）
   project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
   purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
-  # フォールバック（日本語などで空になった場合）
   project_slug = local.project_slug_base
-  purpose_slug = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
-    local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
-  )
+  purpose_slug = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base)
 
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # リソース名
-  name_rg                   = local.base != "" ? "rg-${local.base}" : null
-  name_vnet                 = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet               = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                  = local.base != "" ? "nsg-${local.base}" : null
-  name_sr_allow             = local.base != "" ? "sr-${local.base}-001" : null
-  name_sr_deny_internet_in  = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub   = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+  name_rg                 = local.base != "" ? "rg-${local.base}" : null
+  name_vnet               = local.base != "" ? "vnet-${local.base}" : null
+  name_subnet             = local.base != "" ? "snet-${local.base}" : null
+  name_nsg                = local.base != "" ? "nsg-${local.base}" : null
+  name_sr_allow           = local.base != "" ? "sr-${local.base}-001" : null
+  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
+  name_vnetpeer_hub2spoke = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # サブスクリプション命名（未指定なら規約で自動作成）
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
   name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
-  # Billing Scope（MCA: /providers/Microsoft.Billing/billingAccounts/{}/billingProfiles/{}/invoiceSections/{}）
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # Subscription Alias properties（型整合のため条件付きマージ）
   sub_properties_base = {
     displayName  = local.name_sub_display
     workload     = var.subscription_workload
     billingScope = local.billing_scope
   }
-
   sub_properties_extra = var.management_group_id != "" ? {
-    additionalProperties = {
-      managementGroupId = var.management_group_id
-    }
+    additionalProperties = { managementGroupId = var.management_group_id }
   } : {}
-
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 }
 
-# Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = local.name_sub_alias
   parent_id = "/"
-
-  body = jsonencode({
-    properties = local.sub_properties
-  })
+  body      = jsonencode({ properties = local.sub_properties })
 
   lifecycle {
     precondition {
@@ -116,30 +85,24 @@ resource "azapi_resource" "subscription" {
     }
   }
 
-  timeouts {
-    create = "30m"
-    read   = "5m"
-    delete = "30m"
-  }
+  timeouts { create = "30m", read = "5m", delete = "30m" }
 }
 
 data "azapi_resource" "subscription_get" {
-  count     = local.need_create_subscription ? 1 : 0
-  type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
-  parent_id = "/"
-  response_export_values = ["properties.subscriptionId"]
-  depends_on = [azapi_resource.subscription]
+  count                    = local.need_create_subscription ? 1 : 0
+  type                     = "Microsoft.Subscription/aliases@2021-10-01"
+  name                     = local.name_sub_alias
+  parent_id                = "/"
+  response_export_values   = ["properties.subscriptionId"]
+  depends_on               = [azapi_resource.subscription]
 }
 
-# RG
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
 }
 
-# VNet
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -152,7 +115,6 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
-# NSG
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -184,7 +146,6 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# Subnet（業務用・命名規則適用）
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -197,7 +158,7 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
-# Subnet（Azure Bastion 用・固定名）
+# Azure Bastion 用 Subnet（固定名: AzureBastionSubnet）
 resource "azurerm_subnet" "bastion_subnet" {
   provider             = azurerm.spoke
   name                 = "AzureBastionSubnet"
@@ -210,21 +171,18 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
-# NSG Association（業務用 Subnet）
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
-# NSG Association（Bastion Subnet）
 resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.bastion_subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
-# Peering Hub -> Spoke
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
@@ -239,7 +197,6 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
-# Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
   name                      = local.name_vnetpeer_spoke2hub
@@ -257,7 +214,6 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# Debug outputs（Terraform が見ている値を可視化）
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
