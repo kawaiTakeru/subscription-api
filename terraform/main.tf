@@ -68,8 +68,12 @@ locals {
   name_nsg                  = local.base != "" ? "nsg-${local.base}" : null
   name_sr_allow             = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in  = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub   = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+
+  # VNet Peering 名（用途の箇所に hubtospoke / spoketohub、リージョンは除外）
+  # perr-<PJ/案件名>-hubtospoke-<環境識別子>-<識別番号>
+  # perr-<PJ/案件名>-spoketohub-<環境識別子>-<識別番号>
+  name_vnetpeer_hub2spoke = local.project_slug != "" ? "perr-${local.project_slug}-hubtospoke-${var.environment_id}-${var.sequence}" : null
+  name_vnetpeer_spoke2hub = local.project_slug != "" ? "perr-${local.project_slug}-spoketohub-${var.environment_id}-${var.sequence}" : null
 
   # サブスクリプション命名（未指定なら規約で自動作成）
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
@@ -184,7 +188,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# Subnet (業務用)
+# Subnet（業務用・命名規則適用）
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -197,7 +201,7 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
-# Azure Bastion 用 Subnet（固定名 AzureBastionSubnet）
+# Subnet（Azure Bastion 用・固定名）
 resource "azurerm_subnet" "bastion_subnet" {
   provider             = azurerm.spoke
   name                 = "AzureBastionSubnet"
@@ -271,3 +275,4 @@ output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
 output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+output "debug_vnet_type"     { value = var.vnet_type }
