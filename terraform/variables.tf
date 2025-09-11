@@ -165,6 +165,17 @@ variable "bastion_subnet_number_of_ips" {
   default     = 64
 }
 
+# VNet Type（将来の分岐用: private / public）
+variable "vnet_type" {
+  description = "VNet Type（例: private / public）"
+  type        = string
+  default     = "private"
+  validation {
+    condition     = contains(["private", "public"], lower(var.vnet_type))
+    error_message = "vnet_type は private / public のいずれかにしてください。"
+  }
+}
+
 variable "vpn_client_pool_cidr" {
   description = "VPN クライアントプール CIDR (許可元)"
   type        = string
