@@ -13,6 +13,9 @@ parameters:
 - name: email
   type: string
   default: ""     # 将来拡張用。現時点は受け取りのみ。
+- name: vnet_type
+  type: string
+  default: ""     # 将来拡張用（'private' or 'public'）。現時点は受け取りのみ。
 
 trigger: none
 pr: none
