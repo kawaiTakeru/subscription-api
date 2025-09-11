@@ -13,7 +13,7 @@ parameters:
 - name: email
   type: string
   default: ""     # 将来拡張用。現時点は受け取りのみ。
-# 追加: VNet Type（Function から渡る）※将来の分岐用
+# 追加: VNet Type（Function から渡る）
 - name: vnet_type
   type: string
   default: private
@@ -34,7 +34,7 @@ variables:
     value: true
   - name: azureServiceConnection
     value: snp-pipeline-api-wif
-  # 追加: パラメータを変数に反映（Step 条件分岐で使用）
+  # 条件分岐で使用（parameters を runtime variables に投影）
   - name: vnet_type
     value: ${{ parameters.vnet_type }}
 
@@ -57,7 +57,6 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         env:
-          # Step0はTF実行する場面がある（alias作成）ので明示
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -80,7 +79,6 @@ stages:
             Write-Host "[Step0] vnet_type: $env:TF_VAR_vnet_type"
             Write-Host "[Step0] email (future use): '${{ parameters.email }}'"
 
-            # --- utils（既存） ---
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
@@ -153,6 +151,7 @@ stages:
               throw "Azure CLI did not recognize subscription within $MaxMinutes minutes: $SubId"
             }
 
+            $tfDir = "$(Build.SourcesDirectory)/terraform"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
@@ -234,7 +233,7 @@ stages:
 
             if (-not $finalSubId) { throw "final subscription id could not be resolved." }
 
-            # パイプライン変数設定（後続 Step は env で参照）
+            # 後続 Step 用の変数
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
@@ -245,7 +244,7 @@ stages:
         displayName: Step1 - Resource Group
         env:
           ARM_USE_AZCLI_AUTH: 'true'
-          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)   # ← env にバインド
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -261,8 +260,7 @@ stages:
             $ErrorActionPreference='Stop'
             $subId = $env:ARM_SUBSCRIPTION_ID
             if (-not $subId) { throw "ARM_SUBSCRIPTION_ID env not set" }
-
-            # 短期リトライで CLI 認識/トークン確認
+            # 認証
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -279,10 +277,8 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
-              } else {
-                terraform apply -no-color -input=false -auto-approve
-              }
+                if ($LASTEXITCODE -ne 0) { terraform apply -no-color -input=false -auto-approve }
+              } else { terraform apply -no-color -input=false -auto-approve }
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
 
@@ -313,10 +309,8 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
-              } else {
-                terraform apply -no-color -input=false -auto-approve
-              }
+                if ($LASTEXITCODE -ne 0) { terraform apply -no-color -input=false -auto-approve }
+              } else { terraform apply -no-color -input=false -auto-approve }
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
@@ -354,7 +348,6 @@ stages:
                   -target azurerm_subnet.bastion_subnet `
                   -target azurerm_subnet_network_security_group_association.bastion_assoc
                 if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
                   terraform apply -no-color -input=false -auto-approve
                 }
               } else {
@@ -363,10 +356,50 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
 
-
-      # Step4a: Peering Hub -> Spoke（private のときのみ実行）
+      # Step4: Route Table（private のみ）
       - task: AzureCLI@2
-        displayName: Step4a - Peering Hub->Spoke
+        displayName: Step4 - Route Table (private only)
+        condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            $subId = $env:ARM_SUBSCRIPTION_ID
+            if (-not $subId) { throw "ARM_SUBSCRIPTION_ID env not set" }
+            az account set --subscription $subId
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              if ("$(USE_TARGETED_APPLY)" -eq "true") {
+                terraform apply -no-color -input=false -auto-approve `
+                  -target azurerm_route_table.route_table_private `
+                  -target azurerm_route.route_default_to_gateway `
+                  -target azurerm_route.route_kms1 `
+                  -target azurerm_route.route_kms2 `
+                  -target azurerm_route.route_kms3 `
+                  -target azurerm_subnet_route_table_association.subnet_rt_assoc
+                if ($LASTEXITCODE -ne 0) { terraform apply -no-color -input=false -auto-approve }
+              } else {
+                terraform apply -no-color -input=false -auto-approve
+              }
+              if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
+            } finally { Pop-Location }
+
+      # Step5a: Peering Hub -> Spoke（private のみ）
+      - task: AzureCLI@2
+        displayName: Step5a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -394,9 +427,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke->Hub（private のときのみ実行）
+      # Step5b: Peering Spoke->Hub（private のみ）
       - task: AzureCLI@2
-        displayName: Step4b - Peering Spoke->Hub
+        displayName: Step5b - Peering Spoke->Hub
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
