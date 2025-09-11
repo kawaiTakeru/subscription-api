@@ -95,23 +95,23 @@ locals {
   is_private = !local.is_public
 
   # 画像1/2に基づく Bastion 用 NSG ルール
-  # 注意: Azure の既定ルール(65000/65001/65500)は自動付与のため定義不要
+  # 注意: 既定ルール(65000/65001/65500)は Azure が自動付与するため定義不要
 
   # public: 非閉域網（パブリックサブネット）nsg-<pj>-public-bastion-...
-  # - Inbound: 100/110/120/130
-  # - Outbound: 100/110/120/130（画像1どおり）
-  # AllowBastionInbound は宛先 = AzureBastionSubnet の CIDR
+  # - Inbound: 100/110/120/130（画像1）
+  # - Outbound: 100/110/120/130（画像1）
+  # AllowBastionInbound は宛先 = AzureBastionSubnet の CIDR を使用（実際の適用はリソース側で行う）
   bastion_public_rules = [
     {
-      name      = "AllowBastionInbound"
-      prio      = 100
-      dir       = "Inbound"
-      acc       = "Allow"
-      proto     = "Tcp"
-      src       = "*"
-      dst       = "*"   # 実際の宛先CIDRは dst_prefix を使用
-      dst_prefix= try(azurerm_subnet.bastion_subnet.address_prefixes[0], azurerm_subnet.bastion_subnet.address_prefix)
-      dports    = ["3389","22"]
+      name    = "AllowBastionInbound"
+      prio    = 100
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      src     = "*"
+      dst     = "*"
+      dports  = ["3389","22"]
+      use_bastion_subnet_cidr = true
     },
     {
       name   = "AllowGatewayManagerInbound"
@@ -187,10 +187,8 @@ locals {
   ]
 
   # private: 閉域網（AzureBastionSubnet）nsg-<pj>-private-bastion-...
-  # - Inbound: 100 AllowHttpsInbound (source = 企業側レンジ; ここでは vpn_client_pool_cidr を流用)
+  # - Inbound: 100 AllowHttpsInbound（画像2）＋ 要望どおり GatewayManager 443 を追加
   # - Outbound: 既定のみ（画像2）
-  # 重要: 画像2には記載がありませんが、Azure 準拠では GatewayManager 443 Inbound を要求します。
-  #       画像2のとおりにするため、ここでは追加しません。必要であれば後で1行足せばOKです。
   bastion_private_rules = [
     {
       name   = "AllowHttpsInbound"
@@ -201,18 +199,17 @@ locals {
       src    = var.vpn_client_pool_cidr
       dst    = "*"
       dports = ["443"]
+    },
+    {
+      name   = "AllowGatewayManagerInbound"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "GatewayManager"
+      dst    = "*"
+      dports = ["443"]
     }
-    # もし Azure 準拠で GatewayManager を追加する場合は以下を有効化
-    # ,{
-    #   name   = "AllowGatewayManagerInbound"
-    #   prio   = 110
-    #   dir    = "Inbound"
-    #   acc    = "Allow"
-    #   proto  = "Tcp"
-    #   src    = "GatewayManager"
-    #   dst    = "*"
-    #   dports = ["443"]
-    # }
   ]
 
   # 実際に適用する Bastion ルール
@@ -339,7 +336,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
       source_port_range          = "*"
       destination_port_ranges    = security_rule.value.dports
       source_address_prefix      = security_rule.value.src
-      destination_address_prefix = try(security_rule.value.dst_prefix, security_rule.value.dst)
+      destination_address_prefix = security_rule.value.dst
     }
   }
 }
@@ -354,15 +351,21 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   dynamic "security_rule" {
     for_each = { for r in local.bastion_nsg_rules : r.name => r }
     content {
-      name                       = security_rule.value.name
-      priority                   = security_rule.value.prio
-      direction                  = security_rule.value.dir
-      access                     = security_rule.value.acc
-      protocol                   = security_rule.value.proto
-      source_port_range          = "*"
-      destination_port_ranges    = security_rule.value.dports
-      source_address_prefix      = security_rule.value.src
-      destination_address_prefix = try(security_rule.value.dst_prefix, security_rule.value.dst)
+      name                    = security_rule.value.name
+      priority                = security_rule.value.prio
+      direction               = security_rule.value.dir
+      access                  = security_rule.value.acc
+      protocol                = security_rule.value.proto
+      source_port_range       = "*"
+      destination_port_ranges = security_rule.value.dports
+      source_address_prefix   = security_rule.value.src
+
+      # public側 AllowBastionInbound のみ宛先に AzureBastionSubnet の CIDR を入れる
+      destination_address_prefix = (
+        try(security_rule.value.use_bastion_subnet_cidr, false)
+        ? element(azurerm_subnet.bastion_subnet.address_prefixes, 0)
+        : security_rule.value.dst
+      )
     }
   }
 }
