@@ -10,7 +10,6 @@ terraform {
   }
 }
 
-# azapi は複数行ブロックで定義
 provider "azapi" {
   use_cli = true
   use_msi = false
@@ -31,14 +30,12 @@ provider "azurerm" {
 }
 
 locals {
-  # === サブスクリプション作成フロー（必要時） ===
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # === 命名用正規化 ===
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
@@ -50,19 +47,13 @@ locals {
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # base は従来通り「project + purpose + env + region + seq」
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # vnet_type を正規化（Subnet の <用途> 相当として使用）
   vnet_type_slug = lower(trimspace(var.vnet_type))
 
-  # === リソース名 ===
   name_rg     = local.base != "" ? "rg-${local.base}"   : null
   name_vnet   = local.base != "" ? "vnet-${local.base}" : null
-
-  # Subnet だけ用途ではなく vnet_type を入れる
-  # 形式: snet-<PJ>-<vnet_type>-<環境>-<リージョン略号>-<通番>
   name_subnet = local.project_slug != "" ? "snet-${local.project_slug}-${local.vnet_type_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
@@ -72,18 +63,15 @@ locals {
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # サブスクリプション命名（未指定なら規約で自動）
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
   name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
-  # Billing Scope（MCA）
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # Subscription Alias properties
   sub_properties_base = {
     displayName  = local.name_sub_display
     workload     = var.subscription_workload
@@ -95,29 +83,19 @@ locals {
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 }
 
-# Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = local.name_sub_alias
   parent_id = "/"
-
-  body = jsonencode({
-    properties = local.sub_properties
-  })
-
+  body      = jsonencode({ properties = local.sub_properties })
   lifecycle {
     precondition {
       condition     = local.need_create_subscription ? local.billing_scope != null : true
       error_message = "create_subscription=true の場合、billing_account_name / billing_profile_name / invoice_section_name を設定してください（billingScope 必須）。"
     }
   }
-
-  timeouts {
-    create = "30m"
-    read   = "5m"
-    delete = "30m"
-  }
+  timeouts { create = "30m" read = "5m" delete = "30m" }
 }
 
 data "azapi_resource" "subscription_get" {
@@ -129,18 +107,17 @@ data "azapi_resource" "subscription_get" {
   depends_on = [azapi_resource.subscription]
 }
 
-# =========================
 # RG
-# =========================
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
+  tags = {
+    vnet_type = local.vnet_type_slug
+  }
 }
 
-# =========================
 # VNet
-# =========================
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -151,11 +128,13 @@ resource "azurerm_virtual_network" "vnet" {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.vnet_number_of_ips
   }
+
+  tags = {
+    vnet_type = local.vnet_type_slug
+  }
 }
 
-# =========================
 # NSG
-# =========================
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -174,7 +153,6 @@ resource "azurerm_network_security_group" "subnet_nsg" {
     destination_address_prefix = "*"
   }
 
-  # 既定では Internet Inbound を拒否（public 要求が入れば将来切替可能）
   security_rule {
     name                       = local.name_sr_deny_internet_in
     priority                   = 200
@@ -186,11 +164,13 @@ resource "azurerm_network_security_group" "subnet_nsg" {
     source_address_prefix      = "Internet"
     destination_address_prefix = "*"
   }
+
+  tags = {
+    vnet_type = local.vnet_type_slug
+  }
 }
 
-# =========================
 # Subnet
-# =========================
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -201,30 +181,18 @@ resource "azurerm_subnet" "subnet" {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.subnet_number_of_ips
   }
-
-  # タグで種別を明示（運用可視化）
-  dynamic "delegation" {
-    for_each = []
-    content {}
-  }
-
-  service_endpoints = []
 }
 
-# =========================
 # NSG Association
-# =========================
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
-# =========================
-# Peering Hub -> Spoke（public のときのみ）
-# =========================
+# Peering Hub -> Spoke（private のときのみ）
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
-  count                     = local.vnet_type_slug == "public" ? 1 : 0
+  count                     = local.vnet_type_slug == "private" ? 1 : 0
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
   resource_group_name       = var.hub_rg_name
@@ -238,11 +206,9 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
-# =========================
-# Peering Spoke -> Hub（public のときのみ）
-# =========================
+# Peering Spoke -> Hub（private のときのみ）
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
-  count                     = local.vnet_type_slug == "public" ? 1 : 0
+  count                     = local.vnet_type_slug == "private" ? 1 : 0
   provider                  = azurerm.spoke
   name                      = local.name_vnetpeer_spoke2hub
   resource_group_name       = local.name_rg
@@ -256,9 +222,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
-# =========================
 # Debug outputs（任意）
-# =========================
 output "rg_expected_name"   { value = local.name_rg }
 output "vnet_expected_name" { value = local.name_vnet }
 output "subnet_expected"    { value = local.name_subnet }
