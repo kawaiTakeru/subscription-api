@@ -5,6 +5,7 @@
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
+
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
@@ -152,6 +153,17 @@ variable "vnet_number_of_ips" {
 #############################################
 # Subnet + NSG (Stage3)
 #############################################
+# Subnet 命名の <用途> に vnet_type を使う（空, public, private を許容）
+variable "vnet_type" {
+  description = "VNet の種別。Subnet 名の <用途> 部分として使用 (public/private)。空も可。"
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.vnet_type == "" || contains(["public", "private"], lower(trimspace(var.vnet_type)))
+    error_message = "vnet_type は ''（空）または 'public' / 'private' を指定してください。"
+  }
+}
+
 variable "subnet_number_of_ips" {
   description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
   type        = number
@@ -166,15 +178,4 @@ variable "allowed_port" {
   description = "許可ポート (RDP=3389 / SSH=22 など)"
   type        = number
   default     = 3389
-}
-
-# 追加: Subnet の <用途> 部には vnet_type を使う
-variable "vnet_type" {
-  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private"
-  type        = string
-  default     = "private"
-  validation {
-    condition     = contains(["public","private"], lower(trimspace(var.vnet_type)))
-    error_message = "vnet_type は public / private を指定してください。"
-  }
 }
