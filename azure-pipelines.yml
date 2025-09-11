@@ -347,14 +347,19 @@ stages:
                   -target azurerm_network_security_group.subnet_nsg `
                   -target azurerm_subnet.subnet `
                   -target azurerm_subnet_network_security_group_association.subnet_assoc `
+                  -target azurerm_network_security_group.bastion_nsg `
                   -target azurerm_subnet.bastion_subnet `
                   -target azurerm_subnet_network_security_group_association.bastion_assoc
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Targeted apply failed; fallback full apply"
+                  terraform apply -no-color -input=false -auto-approve
+                }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
+
 
       # Step4a: Peering Hub -> Spoke
       - task: AzureCLI@2
