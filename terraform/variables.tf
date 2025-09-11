@@ -167,9 +167,9 @@ variable "allowed_port" {
   default     = 3389
 }
 
-# Subnet の命名で用途欄に使用（public/private）
+# Subnet の命名・挙動切替で使用（public/private）
 variable "vnet_type" {
-  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private。空でも可（CIで未指定のときに落ちないため）"
+  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private。"
   type        = string
   default     = ""
   validation {
