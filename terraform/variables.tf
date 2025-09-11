@@ -17,154 +17,100 @@ variable "purpose_name" {
   type        = string
   default     = ""
   validation {
-    condition     = length(trimspace(var.purpose_name)) > 0
-    error_message = "purpose_name は必須です。例: kensho2"
+    condition     = true
+    error_message = ""
   }
 }
 
 variable "environment_id" {
-  description = "環境識別子（例: prd, stg, dev）"
+  description = "環境識別子（例: dev/stg/prd）"
   type        = string
-  default     = "prd"
 }
 
 variable "region_code" {
-  description = "リージョン略号（例: jpe=japaneast）"
+  description = "リージョン略号（例: jpe, cac, usw）"
   type        = string
-  default     = "jpe"
 }
 
 variable "sequence" {
-  description = "識別番号（ゼロ埋め文字列推奨: 001）"
+  description = "識別番号（例: 001, 002）"
   type        = string
-  default     = "001"
-}
-
-# サブスクリプション名（未指定なら自動生成: sub-<base>）
-variable "subscription_alias_name" {
-  description = "内部で使われるサブスクリプションエイリアス名（空なら命名規約で自動生成）"
-  type        = string
-  default     = ""
-}
-
-variable "subscription_display_name" {
-  description = "ポータル表示名（空なら命名規約で自動生成）"
-  type        = string
-  default     = ""
-}
-
-variable "billing_account_name" {
-  description = "課金アカウント名"
-  type        = string
-}
-
-variable "billing_profile_name" {
-  description = "課金プロファイル名"
-  type        = string
-}
-
-variable "invoice_section_name" {
-  description = "請求セクション名"
-  type        = string
-}
-
-variable "subscription_workload" {
-  description = "Workload 種別 (Production / DevTest)"
-  type        = string
-  default     = "Production"
 }
 
 variable "create_subscription" {
-  description = "サブスクリプション(エイリアス)を新規作成するか (spoke_subscription_id 空の場合のみ有効)"
-  type        = bool
-  default     = true
-}
-
-variable "enable_billing_check" {
-  description = "Billing 読み取りチェック (未使用: 将来拡張用)"
+  description = "サブスクリプションを新規作成するかどうか"
   type        = bool
   default     = false
 }
 
 variable "spoke_subscription_id" {
-  description = "既存 Spoke Subscription ID (既存利用時)。新規作成時は Step0 後に pipeline から注入"
+  description = "Spoke サブスクリプション ID（既存利用の場合）"
   type        = string
   default     = ""
 }
 
 variable "spoke_tenant_id" {
-  description = "Spoke Tenant ID (必要に応じて)"
+  description = "Spoke テナント ID（既存利用の場合）"
+  type        = string
+  default     = ""
+}
+
+variable "hub_subscription_id" {
+  description = "Hub サブスクリプション ID"
+  type        = string
+}
+
+variable "hub_tenant_id" {
+  description = "Hub テナント ID"
   type        = string
   default     = ""
 }
 
 variable "management_group_id" {
-  description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
-  type        = string
-  default     = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
-}
-
-#############################################
-# Hub 側 (Peering 用)
-#############################################
-variable "hub_subscription_id" {
-  description = "Hub Subscription ID"
-  type        = string
-}
-
-variable "hub_tenant_id" {
-  description = "Hub Tenant ID (必要に応じて)"
+  description = "管理グループ ID"
   type        = string
   default     = ""
 }
 
-variable "hub_vnet_name" {
-  description = "Hub VNet name"
+variable "billing_account_name" {
+  description = "Billing Account Name"
   type        = string
+  default     = ""
 }
 
-variable "hub_rg_name" {
-  description = "Hub Resource Group name"
+variable "billing_profile_name" {
+  description = "Billing Profile Name"
   type        = string
+  default     = ""
 }
 
-#############################################
-# Resource Group (Stage1)
-#############################################
-variable "region" {
-  description = "Azure region (例: japaneast)"
+variable "invoice_section_name" {
+  description = "Invoice Section Name"
   type        = string
-  default     = "japaneast"
+  default     = ""
 }
 
-#############################################
-# VNet (Stage2)
-#############################################
-variable "ipam_pool_id" {
-  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
+variable "subscription_alias_name" {
+  description = "Subscription Alias Name"
   type        = string
+  default     = ""
 }
 
-variable "vnet_number_of_ips" {
-  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
-  type        = number
-}
-
-#############################################
-# Subnet + NSG (Stage3)
-#############################################
-variable "subnet_number_of_ips" {
-  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
-  type        = number
-}
-
-variable "vpn_client_pool_cidr" {
-  description = "VPN クライアントプール CIDR (許可元)"
+variable "subscription_display_name" {
+  description = "Subscription Display Name"
   type        = string
+  default     = ""
 }
 
-variable "allowed_port" {
-  description = "許可ポート (RDP=3389 / SSH=22 など)"
-  type        = number
-  default     = 3389
+variable "subscription_workload" {
+  description = "Subscription workload type (Production / DevTest)"
+  type        = string
+  default     = "Production"
+}
+
+# 新規追加
+variable "vnet_type" {
+  description = "VNet type: public or private"
+  type        = string
+  default     = ""
 }
