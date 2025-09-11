@@ -8,9 +8,6 @@ purpose_name   = "json"   # 用途（"検証" の場合は "kensho" にフォー
 region_code    = "jpe"       # リージョン略号（名前のみで使用、region と整合させる）
 sequence       = "001"       # 識別番号（ゼロパディング推奨）
 
-# Subnet 命名の <用途> には vnet_type を使用（public/private）
-# vnet_type is provided via TF_VAR_vnet_type from Pipeline
-
 # ===========================================
 # 配置リージョン（名前には影響しない）
 # ===========================================
@@ -35,9 +32,10 @@ management_group_id = "/providers/Microsoft.Management/managementGroups/mg-bft-t
 # ==============================
 # VNet / Subnet / NSG (Step1-3)
 # ==============================
-ipam_pool_id         = "/subscriptions/6a018b75-55b5-4b68-960d-7328148568aa/resourceGroups/rg-apim-dev/providers/Microsoft.Network/networkManagers/nm-apimdev-ipam/ipamPools/root-10-20"
-vnet_number_of_ips   = 1024
-subnet_number_of_ips = 256
+ipam_pool_id                 = "/subscriptions/6a018b75-55b5-4b68-960d-7328148568aa/resourceGroups/rg-apim-dev/providers/Microsoft.Network/networkManagers/nm-apimdev-ipam/ipamPools/root-10-20"
+vnet_number_of_ips           = 1024
+subnet_number_of_ips         = 256
+bastion_subnet_number_of_ips = 64
 
 vpn_client_pool_cidr = "172.16.201.0/24"
 allowed_port         = 3389
