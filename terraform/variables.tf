@@ -153,13 +153,14 @@ variable "vnet_number_of_ips" {
 #############################################
 # Subnet + NSG (Stage3)
 #############################################
-# Subnet の命名規則の <用途> 部に vnet_type を反映 (public/private)
+# Subnet 命名の <用途> に vnet_type を使う（空, public, private を許容）
 variable "vnet_type" {
-  description = "VNet の種別。Subnet 名の <用途> 部分として使用 (public または private)"
+  description = "VNet の種別。Subnet 名の <用途> 部分として使用 (public/private)。空も可。"
   type        = string
+  default     = ""
   validation {
-    condition     = contains(["public", "private"], lower(trimspace(var.vnet_type)))
-    error_message = "vnet_type は 'public' か 'private' を指定してください。"
+    condition     = var.vnet_type == "" || contains(["public", "private"], lower(trimspace(var.vnet_type)))
+    error_message = "vnet_type は ''（空）または 'public' / 'private' を指定してください。"
   }
 }
 
