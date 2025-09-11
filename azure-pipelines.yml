@@ -13,6 +13,7 @@ parameters:
 - name: email
   type: string
   default: ""     # 将来拡張用。現時点は受け取りのみ。
+# 追加: VNet Type（Function から渡る）※将来の分岐用
 - name: vnet_type
   type: string
   default: private
@@ -53,6 +54,7 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         env:
+          # Step0はTF実行する場面がある（alias作成）ので明示
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -68,12 +70,14 @@ stages:
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             Write-Host "[Step0] Terraform dir: $tfDir"
 
+            # 受信値確認
             $projectParam = "${{ parameters.project_name }}"
-            Write-Host "[Step0] project_name from parameters: '$projectParam'"
-            Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
-            Write-Host "[Step0] vnet_type from env: $env:TF_VAR_vnet_type"
-            Write-Host "[Step0] email from parameters (for future use): '${{ parameters.email }}'"
+            Write-Host "[Step0] project_name: '$projectParam'"
+            Write-Host "[Step0] environment_id: $env:TF_VAR_environment_id"
+            Write-Host "[Step0] vnet_type: $env:TF_VAR_vnet_type"
+            Write-Host "[Step0] email (future use): '${{ parameters.email }}'"
 
+            # --- utils（既存） ---
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
@@ -146,10 +150,10 @@ stages:
               throw "Azure CLI did not recognize subscription within $MaxMinutes minutes: $SubId"
             }
 
-            $tfDir = "$(Build.SourcesDirectory)/terraform"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
+            # 入力値取得
             $aliasName   = Get-TfVar $tfvars "subscription_alias_name"
             $dispName    = Get-TfVar $tfvars "subscription_display_name"
             $createRaw   = Get-TfVar $tfvars "create_subscription"
@@ -157,28 +161,23 @@ stages:
             $spokeIdInTf = Get-TfVar $tfvars "spoke_subscription_id"
             $hubSubId    = Get-TfVar $tfvars "hub_subscription_id"
 
+            # 命名（省略: 既存ロジックそのまま）
             if (-not $aliasName -or -not $dispName) {
-              $project = $projectParam
               $purpose = Get-TfVar $tfvars "purpose_name"
               $envId   = Get-TfVar $tfvars "environment_id"
               $rCode   = Get-TfVar $tfvars "region_code"
               $seq     = Get-TfVar $tfvars "sequence"
-              $base    = Build-Base $project $purpose $envId $rCode $seq
+              $base    = Build-Base $projectParam $purpose $envId $rCode $seq
               if (-not $base) {
-                $rgName = Get-TfVar $tfvars "rg_name"
-                $base = Derive-Base-From-Name $rgName "rg"
+                $rgName = Get-TfVar $tfvars "rg_name"; if ($rgName) { $base = Derive-Base-From-Name $rgName "rg" }
               }
               if (-not $base) {
-                $vnetName = Get-TfVar $tfvars "vnet_name"
-                $base = Derive-Base-From-Name $vnetName "vnet"
+                $vnetName = Get-TfVar $tfvars "vnet_name"; if ($vnetName) { $base = Derive-Base-From-Name $vnetName "vnet" }
               }
-              if (-not $base) {
-                $ts = Get-Date -Format "yyyyMMddHHmmss"
-                $base = "gen-$ts"
-              }
+              if (-not $base) { $base = "gen-" + (Get-Date -Format "yyyyMMddHHmmss") }
               if (-not $aliasName) { $aliasName = "sub-$base" }
               if (-not $dispName)  { $dispName  = "sub-$base" }
-              Write-Host "[Step0] alias/display auto-computed: $aliasName"
+              Write-Host "[Step0] alias/display auto: $aliasName"
             }
 
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
@@ -190,38 +189,33 @@ stages:
             if (-not $createFlag) {
               if (-not $spokeIdInTf) { throw "create_subscription=false の場合は spoke_subscription_id が必須" }
               $finalSubId = $spokeIdInTf
-              Write-Host "[Step0] Using provided existing subscription: $finalSubId]"
+              Write-Host "[Step0] Using existing subscription: $finalSubId"
             } else {
               if ($spokeIdInTf) {
-                Write-Warning "[Step0] create_subscription=true ですが spoke_subscription_id が指定されています。既存IDを優先します。"
+                Write-Warning "[Step0] create_subscription=true ですが既存IDを優先します。"
                 $finalSubId = $spokeIdInTf
               } else {
                 $reuseId = Get-SubscriptionIdFromAlias $aliasName
                 if ($reuseId) {
-                  Write-Host "[Step0] Alias already exists. Reuse subscriptionId=$reuseId"
+                  Write-Host "[Step0] Alias exists. Reuse subscriptionId=$reuseId"
                   $finalSubId = $reuseId
                 } else {
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
                     if ($LASTEXITCODE -ne 0) { throw "terraform init failed" }
-
                     $vars = @("-var", "subscription_alias_name=$aliasName", "-var", "subscription_display_name=$dispName")
                     terraform apply -no-color -input=false -auto-approve -target azapi_resource.subscription[0] @vars
                     if ($LASTEXITCODE -ne 0) { throw "terraform apply (alias target) failed" }
 
                     $subOut = Get-SubscriptionIdFromAlias $aliasName
-                    if (-not $subOut) {
-                      $subOut = terraform output -raw subscription_id 2>$null
-                    }
+                    if (-not $subOut) { $subOut = terraform output -raw subscription_id 2>$null }
                     if (-not $subOut) { throw "Could not resolve subscription id after creation." }
                     $finalSubId = $subOut.Trim()
                     $aliasCreatedNew = "true"
 
                     terraform state show azapi_resource.subscription[0] 1>$null 2>$null
-                    if ($LASTEXITCODE -eq 0) {
-                      terraform state rm azapi_resource.subscription[0] | Out-Null
-                    }
+                    if ($LASTEXITCODE -eq 0) { terraform state rm azapi_resource.subscription[0] | Out-Null }
 
                     @(
                       'create_subscription = false'
@@ -229,17 +223,15 @@ stages:
                     ) | Set-Content -Encoding UTF8 (Join-Path $tfDir "override.auto.tfvars")
                     Write-Host "[Step0] override.auto.tfvars written."
                   } finally { Pop-Location }
-
-                  # 可視化待ち
-                  $null = Wait-For-ARM $finalSubId 240
-                  $null = Wait-For-AzCliVisibility $finalSubId 10
+                  Wait-For-ARM $finalSubId 240
+                  Wait-For-AzCliVisibility $finalSubId 10
                 }
               }
             }
 
             if (-not $finalSubId) { throw "final subscription id could not be resolved." }
 
-            # 後続ステップ用の変数を設定
+            # パイプライン変数設定（後続 Step は env で参照）
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
             Write-Host "##vso[task.setvariable variable=aliasCreatedNew]$aliasCreatedNew"
@@ -250,7 +242,7 @@ stages:
         displayName: Step1 - Resource Group
         env:
           ARM_USE_AZCLI_AUTH: 'true'
-          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)   # ← env にバインド
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -264,11 +256,10 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-
             $subId = $env:ARM_SUBSCRIPTION_ID
             if (-not $subId) { throw "ARM_SUBSCRIPTION_ID env not set" }
 
-            # 追加の短期リトライで CLI 認識とトークン取得を確認
+            # 短期リトライで CLI 認識/トークン確認
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -285,10 +276,7 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
@@ -322,10 +310,7 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
@@ -364,10 +349,7 @@ stages:
                   -target azurerm_subnet_network_security_group_association.subnet_assoc `
                   -target azurerm_subnet.bastion_subnet `
                   -target azurerm_subnet_network_security_group_association.bastion_assoc
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
