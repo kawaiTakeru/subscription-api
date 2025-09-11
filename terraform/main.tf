@@ -48,9 +48,11 @@ locals {
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
+  # スラッグ化
   project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
   purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
+  # フォールバック
   project_slug = local.project_slug_base
   purpose_slug = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
@@ -59,10 +61,9 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # 命名
+  # 命名（通常 Subnet/NSG はご指定の規則）
   name_rg                   = local.base != "" ? "rg-${local.base}" : null
   name_vnet                 = local.base != "" ? "vnet-${local.base}" : null
-  # 通常 Subnet/NSG の命名（ご指定の規則）
   name_subnet               = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_nsg                  = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
@@ -100,12 +101,13 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
+  # Bastion サブネット CIDR を安全に取得（IPAM で plan 時に未確定でも落ちないように）
+  bastion_subnet_cidr = can(azurerm_subnet.bastion_subnet.address_prefixes[0]) ? azurerm_subnet.bastion_subnet.address_prefixes[0] : null
+
   # 画像1/2に基づく Bastion 用 NSG ルール
-  # 既定ルール(65000/65001/65500)は Azure が自動付与するため Terraform では定義不要
-  # 型の不一致を避けるため、各要素（オブジェクト）のキーを完全に一致させる
-  # 全ルールで以下のキーを持つ:
-  # - name(string), prio(number), dir(string), acc(string), proto(string),
-  #   src(string), dst(string), dports(list(string)), use_bastion_subnet_cidr(bool)
+  # 既定ルール(65000/65001/65500)は Azure が自動付与のため Terraform では定義不要
+  # 型不一致を避けるため、各要素（オブジェクト）のキーを完全一致させる
+  # 全ルールのキー: name, prio, dir, acc, proto, src, dst, dports, use_bastion_subnet_cidr
 
   # public（画像1）
   bastion_public_rules = tolist([
@@ -116,7 +118,7 @@ locals {
       acc   = "Allow"
       proto = "Tcp"
       src   = "*"
-      dst   = "*"          # 実際の宛先は use_bastion_subnet_cidr=true で置き換え
+      dst   = "*"          # 宛先は use_bastion_subnet_cidr で置換
       dports = ["3389","22"]
       use_bastion_subnet_cidr = true
     },
@@ -228,7 +230,7 @@ locals {
   # 条件で選択（両辺 list(object(...)) 型で一致）
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
-  # 通常 Subnet 用 NSG（前回ご提示どおり。こちらも型揃えのため同じキーセットを使用）
+  # 通常 Subnet 用 NSG（ご提示仕様に合わせる。キーを統一）
   normal_nsg_rules = tolist(concat(
     [
       {
@@ -376,9 +378,10 @@ resource "azurerm_network_security_group" "bastion_nsg" {
       source_port_range       = "*"
       destination_port_ranges = security_rule.value.dports
       source_address_prefix   = security_rule.value.src
+      # BastionSubnet の CIDR は plan 時に未知の可能性があるため、null 時は "*" にフォールバック
       destination_address_prefix = (
-        security_rule.value.use_bastion_subnet_cidr
-        ? element(azurerm_subnet.bastion_subnet.address_prefixes, 0)
+        security_rule.value.use_bastion_subnet_cidr && local.bastion_subnet_cidr != null
+        ? local.bastion_subnet_cidr
         : security_rule.value.dst
       )
     }
