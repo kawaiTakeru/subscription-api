@@ -158,15 +158,11 @@ variable "subnet_number_of_ips" {
   type        = number
 }
 
-# VNet Type（将来の分岐用）
-variable "vnet_type" {
-  description = "VNet Type（例: private / public）"
-  type        = string
-  default     = "private"
-  validation {
-    condition     = contains(["private", "public"], lower(var.vnet_type))
-    error_message = "vnet_type は private / public のいずれかにしてください。"
-  }
+# Azure Bastion 用 Subnet の IP 数（推奨 /26 = 64 IP）
+variable "bastion_subnet_number_of_ips" {
+  description = "AzureBastionSubnet に割り当てたい IP 数 (推奨: 64 ≒ /26)"
+  type        = number
+  default     = 64
 }
 
 variable "vpn_client_pool_cidr" {
