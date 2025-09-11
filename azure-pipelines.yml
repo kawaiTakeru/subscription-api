@@ -1,7 +1,7 @@
 parameters:
 - name: environment_id
   type: string
-  default: dev            # values に含まれる有効値に修正
+  default: dev
   values:
   - cmn
   - dev
@@ -12,10 +12,10 @@ parameters:
   default: ""
 - name: email
   type: string
-  default: ""             # 任意
+  default: ""     # 任意
 - name: vnet_type
   type: string
-  default: private        # values に含まれる有効値に修正
+  default: private
   values:
   - private
   - public
@@ -53,7 +53,6 @@ stages:
         name: step0
         displayName: Step0 - Subscription (create or reuse)
         env:
-          # Step0はTF実行する場面がある（alias作成）ので明示
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -75,7 +74,6 @@ stages:
             Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
             Write-Host "[Step0] email from parameters (for future use): '${{ parameters.email }}'"
 
-            # --- tfvars ユーティリティ（既存） ---
             function Get-TfVar {
               param([string]$Path,[string]$Key)
               if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
@@ -220,7 +218,6 @@ stages:
 
                     $subOut = Get-SubscriptionIdFromAlias $aliasName
                     if (-not $subOut) {
-                      # optional fallback
                       $subOut = terraform output -raw subscription_id 2>$null
                     }
                     if (-not $subOut) { throw "Could not resolve subscription id after creation." }
@@ -260,7 +257,7 @@ stages:
         displayName: Step1 - Resource Group
         env:
           ARM_USE_AZCLI_AUTH: 'true'
-          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)   # マクロ→envへ注入
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
@@ -274,12 +271,11 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            $subId = $env:ARM_SUBSCRIPTION_ID   # ← $(...) を使わず env を参照
+            $subId = $env:ARM_SUBSCRIPTION_ID
             Write-Host "DEBUG SUBSCRIPTION from env: $subId"
             Write-Host "DEBUG project_name from env: $env:TF_VAR_project_name"
             Write-Host "DEBUG environment_id from env: $env:TF_VAR_environment_id"
 
-            # 追加の短期リトライで CLI 認識とトークン取得を確認
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
               try {
@@ -351,7 +347,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}   # Subnet命名に必要
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -389,7 +385,7 @@ stages:
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
           TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-          hubSubscriptionId: $(hubSubscriptionId)          # envに注入
+          hubSubscriptionId: $(hubSubscriptionId)
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
