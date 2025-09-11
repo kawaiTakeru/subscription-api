@@ -165,15 +165,15 @@ variable "bastion_subnet_number_of_ips" {
   default     = 64
 }
 
-# VNet Type（将来の分岐用: private / public）
+# VNet Type（public / private）: Bastion 用 NSG の命名・ルール切替に使用
 variable "vnet_type" {
-  description = "VNet Type（例: private / public）"
+  description = "VNet Type（public / private）"
   type        = string
   default     = "private"
 
   validation {
-    condition     = contains(["private", "public"], lower(var.vnet_type))
-    error_message = "vnet_type は private / public のいずれかにしてください。"
+    condition     = contains(["public", "private"], lower(var.vnet_type))
+    error_message = "vnet_type は public / private のいずれかにしてください。"
   }
 }
 
