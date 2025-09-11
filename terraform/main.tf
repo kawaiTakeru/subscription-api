@@ -1,7 +1,3 @@
-#############################################
-# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
-#############################################
-
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
@@ -10,7 +6,11 @@ terraform {
   }
 }
 
-provider "azapi"  { use_cli = true, use_msi = false }
+provider "azapi" {
+  use_cli = true
+  use_msi = false
+}
+
 provider "azurerm" {
   alias           = "spoke"
   features        {}
@@ -37,19 +37,14 @@ locals {
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # base は従来通り「project + purpose + env + region + seq」
+  # base は従来通り
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # vnet_type の正規化（Subnet 名の <用途> 相当として使用）
-  vnet_type_slug = lower(trimspace(var.vnet_type))
-
-  # === 各リソース名 ===
+  # Subnet の <用途> 部だけ vnet_type を使用
   name_rg     = local.base != "" ? "rg-${local.base}"   : null
   name_vnet   = local.base != "" ? "vnet-${local.base}" : null
-
-  # ここだけ用途ではなく vnet_type を入れる（要望どおり）
-  name_subnet = local.project_slug != "" ? "snet-${local.project_slug}-${local.vnet_type_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_subnet = local.project_slug != "" ? "snet-${local.project_slug}-${var.vnet_type}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
@@ -58,7 +53,6 @@ locals {
   name_vnetpeer_hub2spoke = local.project_slug != "" ? "perr-${local.project_slug}-hubtospoke-${var.environment_id}-${var.sequence}" : null
   name_vnetpeer_spoke2hub = local.project_slug != "" ? "perr-${local.project_slug}-spoketohub-${var.environment_id}-${var.sequence}" : null
 
-  # 以降（Subscription Alias / billingScope など）は元のまま…
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
   name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
@@ -79,7 +73,6 @@ locals {
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 }
 
-# Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = var.create_subscription && var.spoke_subscription_id == "" ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
