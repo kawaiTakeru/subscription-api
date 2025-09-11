@@ -8,6 +8,9 @@ purpose_name   = "json"   # 用途（"検証" の場合は "kensho" にフォー
 region_code    = "jpe"       # リージョン略号（名前のみで使用、region と整合させる）
 sequence       = "001"       # 識別番号（ゼロパディング推奨）
 
+# Subnet 命名の <用途> には vnet_type を使用（public/private）
+# vnet_type is provided via TF_VAR_vnet_type from Pipeline
+
 # ===========================================
 # 配置リージョン（名前には影響しない）
 # ===========================================
