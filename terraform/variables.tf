@@ -1,9 +1,11 @@
 #############################################
 # Subscription (Stage0 相当)
 #############################################
+# 命名規約用 変数（<識別子>-<PJ>-<用途>-<環境>-<リージョン略>-<通番>）
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
+
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
@@ -156,6 +158,13 @@ variable "subnet_number_of_ips" {
   type        = number
 }
 
+# Azure Bastion 用 Subnet の IP 数（推奨 /26 = 64 IP）
+variable "bastion_subnet_number_of_ips" {
+  description = "AzureBastionSubnet に割り当てたい IP 数 (推奨: 64 ≒ /26)"
+  type        = number
+  default     = 64
+}
+
 variable "vpn_client_pool_cidr" {
   description = "VPN クライアントプール CIDR (許可元)"
   type        = string
@@ -165,15 +174,4 @@ variable "allowed_port" {
   description = "許可ポート (RDP=3389 / SSH=22 など)"
   type        = number
   default     = 3389
-}
-
-# Subnet の命名・挙動切替で使用（public/private）
-variable "vnet_type" {
-  description = "VNet の種別（Subnet 命名の用途欄に使用）。public / private。"
-  type        = string
-  default     = ""
-  validation {
-    condition     = var.vnet_type == "" || contains(["public", "private"], lower(trimspace(var.vnet_type)))
-    error_message = "vnet_type は ''（空）または 'public' / 'private' を指定してください。"
-  }
 }
