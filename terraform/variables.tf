@@ -16,10 +16,7 @@ variable "purpose_name" {
   description = "用途（例: kensho2 / 検証 など）"
   type        = string
   default     = ""
-  validation {
-    condition     = true
-    error_message = ""
-  }
+  # ※ 以前の `condition = true` はエラーになるので入れません
 }
 
 variable "environment_id" {
@@ -108,7 +105,7 @@ variable "subscription_workload" {
   default     = "Production"
 }
 
-# 新規追加
+# 追加: public / private
 variable "vnet_type" {
   description = "VNet type: public or private"
   type        = string
