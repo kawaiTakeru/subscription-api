@@ -88,14 +88,23 @@ resource "azapi_resource" "subscription" {
   type      = "Microsoft.Subscription/aliases@2021-10-01"
   name      = local.name_sub_alias
   parent_id = "/"
-  body      = jsonencode({ properties = local.sub_properties })
+
+  body = jsonencode({
+    properties = local.sub_properties
+  })
+
   lifecycle {
     precondition {
       condition     = local.need_create_subscription ? local.billing_scope != null : true
       error_message = "create_subscription=true の場合、billing_account_name / billing_profile_name / invoice_section_name を設定してください（billingScope 必須）。"
     }
   }
-  timeouts { create = "30m" read = "5m" delete = "30m" }
+
+  timeouts {
+    create = "30m"
+    read   = "5m"
+    delete = "30m"
+  }
 }
 
 data "azapi_resource" "subscription_get" {
@@ -112,9 +121,6 @@ resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
-  tags = {
-    vnet_type = local.vnet_type_slug
-  }
 }
 
 # VNet
@@ -127,10 +133,6 @@ resource "azurerm_virtual_network" "vnet" {
   ip_address_pool {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.vnet_number_of_ips
-  }
-
-  tags = {
-    vnet_type = local.vnet_type_slug
   }
 }
 
@@ -163,10 +165,6 @@ resource "azurerm_network_security_group" "subnet_nsg" {
     destination_port_range     = "*"
     source_address_prefix      = "Internet"
     destination_address_prefix = "*"
-  }
-
-  tags = {
-    vnet_type = local.vnet_type_slug
   }
 }
 
