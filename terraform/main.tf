@@ -61,48 +61,108 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # リソース名
-  name_rg                   = local.base != "" ? "rg-${local.base}" : null
-  name_vnet                 = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet               = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                  = local.base != "" ? "nsg-${local.base}" : null
-  name_sr_allow             = local.base != "" ? "sr-${local.base}-001" : null
-  name_sr_deny_internet_in  = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke   = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub   = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
+  # 既存リソース名
+  name_rg                 = local.base != "" ? "rg-${local.base}" : null
+  name_vnet               = local.base != "" ? "vnet-${local.base}" : null
+  name_subnet             = local.base != "" ? "snet-${local.base}" : null
+  name_nsg                = local.base != "" ? "nsg-${local.base}" : null
+  name_sr_allow           = local.base != "" ? "sr-${local.base}-001" : null
+  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
+  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # サブスクリプション命名（未指定なら規約で自動作成）
-  name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
-  name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
+  # Bastion 用 NSG 名（ご指定の命名規則）
+  # nsg-<PJ/案件名>-<vnettype>-bastion-<環境識別子>-<リージョン略号>-<識別番号>
+  name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # Billing Scope（MCA: /providers/Microsoft.Billing/billingAccounts/{}/billingProfiles/{}/invoiceSections/{}）
+  # Billing Scope（MCA: /providers/Microsoft.Billing/...）
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # Subscription Alias properties（型整合のため条件付きマージ）
+  # Subscription Alias properties
   sub_properties_base = {
-    displayName  = local.name_sub_display
+    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
     workload     = var.subscription_workload
     billingScope = local.billing_scope
   }
-
   sub_properties_extra = var.management_group_id != "" ? {
-    additionalProperties = {
-      managementGroupId = var.management_group_id
-    }
+    additionalProperties = { managementGroupId = var.management_group_id }
   } : {}
-
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
+
+  # Bastion NSG ルール生成用
+  is_public = lower(var.vnet_type) == "public"
+
+  # 受信 443 の許可元（public=Internet / private=指定レンジに既存の vpn_client_pool_cidr を流用）
+  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
+
+  # Bastion 向けカスタムルール一覧（画像仕様に基づく）
+  bastion_nsg_rules = concat(
+    [
+      {
+        name   = "AllowHttpsInbound"
+        prio   = 100
+        dir    = "Inbound"
+        acc    = "Allow"
+        proto  = "Tcp"
+        src    = local.bastion_https_source
+        dst    = "*"
+        dports = ["443"]
+      }
+    ],
+    local.is_public ? [
+      {
+        name   = "AllowSshRdpOutbound"
+        prio   = 100
+        dir    = "Outbound"
+        acc    = "Allow"
+        proto  = "*"
+        src    = "*"
+        dst    = "VirtualNetwork"
+        dports = ["22","3389"]
+      },
+      {
+        name   = "AllowAzureCloudOutbound"
+        prio   = 110
+        dir    = "Outbound"
+        acc    = "Allow"
+        proto  = "Tcp"
+        src    = "*"
+        dst    = "AzureCloud"
+        dports = ["443"]
+      },
+      {
+        name   = "AllowBastionCommunicationOutbound"
+        prio   = 120
+        dir    = "Outbound"
+        acc    = "Allow"
+        proto  = "*"
+        src    = "VirtualNetwork"
+        dst    = "VirtualNetwork"
+        dports = ["8080","5701"]
+      },
+      {
+        name   = "AllowHttpOutbound"
+        prio   = 130
+        dir    = "Outbound"
+        acc    = "Allow"
+        proto  = "*"
+        src    = "*"
+        dst    = "Internet"
+        dports = ["80"]
+      }
+    ] : []
+  )
 }
 
 # Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
   parent_id = "/"
 
   body = jsonencode({
@@ -126,7 +186,7 @@ resource "azapi_resource" "subscription" {
 data "azapi_resource" "subscription_get" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
   parent_id = "/"
   response_export_values = ["properties.subscriptionId"]
   depends_on = [azapi_resource.subscription]
@@ -152,7 +212,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
-# NSG
+# 既存 NSG（業務用）
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -184,6 +244,29 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
+# Bastion 専用 NSG（新規）
+resource "azurerm_network_security_group" "bastion_nsg" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_nsg
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  dynamic "security_rule" {
+    for_each = { for r in local.bastion_nsg_rules : r.name => r }
+    content {
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.prio
+      direction                  = security_rule.value.dir
+      access                     = security_rule.value.acc
+      protocol                   = security_rule.value.proto
+      source_port_range          = "*"
+      destination_port_ranges    = security_rule.value.dports
+      source_address_prefix      = security_rule.value.src
+      destination_address_prefix = security_rule.value.dst
+    }
+  }
+}
+
 # Subnet（業務用・命名規則適用）
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
@@ -210,18 +293,18 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
-# NSG Association（業務用 Subnet）
+# NSG Association（業務用 Subnet）←既存のまま
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.subnet_nsg.id
 }
 
-# NSG Association（Bastion Subnet）
+# NSG Association（Bastion Subnet）←新規 NSG に付け替え
 resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.bastion_subnet.id
-  network_security_group_id = azurerm_network_security_group.subnet_nsg.id
+  network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
 # Peering Hub -> Spoke
