@@ -1,7 +1,7 @@
 parameters:
 - name: environment_id
   type: string
-  default: dev
+  default: ""
   values:
   - cmn
   - dev
@@ -9,13 +9,13 @@ parameters:
   - prd
 - name: project_name
   type: string
-  default: bft
+  default: ""
 - name: email
   type: string
   default: ""     # 任意
 - name: vnet_type
   type: string
-  default: private
+  default: ""
   values:
   - private
   - public
