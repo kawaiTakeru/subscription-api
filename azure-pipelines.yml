@@ -34,6 +34,9 @@ variables:
     value: true
   - name: azureServiceConnection
     value: snp-pipeline-api-wif
+  # 追加: パラメータを変数に反映（Step 条件分岐で使用）
+  - name: vnet_type
+    value: ${{ parameters.vnet_type }}
 
 stages:
 - stage: provision_all
@@ -361,9 +364,10 @@ stages:
             } finally { Pop-Location }
 
 
-      # Step4a: Peering Hub -> Spoke
+      # Step4a: Peering Hub -> Spoke（private のときのみ実行）
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
+        condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -390,9 +394,10 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke->Hub
+      # Step4b: Peering Spoke->Hub（private のときのみ実行）
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
+        condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
