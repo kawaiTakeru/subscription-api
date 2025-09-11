@@ -68,6 +68,7 @@ locals {
   name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
+
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
@@ -173,6 +174,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
     destination_address_prefix = "*"
   }
 
+  # 既定では Internet Inbound を拒否（public 要求が入れば将来切替可能）
   security_rule {
     name                       = local.name_sr_deny_internet_in
     priority                   = 200
@@ -199,6 +201,14 @@ resource "azurerm_subnet" "subnet" {
     id                     = var.ipam_pool_id
     number_of_ip_addresses = var.subnet_number_of_ips
   }
+
+  # タグで種別を明示（運用可視化）
+  dynamic "delegation" {
+    for_each = []
+    content {}
+  }
+
+  service_endpoints = []
 }
 
 # =========================
