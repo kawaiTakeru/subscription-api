@@ -211,9 +211,10 @@ resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
 }
 
 # =========================
-# Peering Hub -> Spoke
+# Peering Hub -> Spoke（public のときのみ）
 # =========================
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
+  count                     = local.vnet_type_slug == "public" ? 1 : 0
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
   resource_group_name       = var.hub_rg_name
@@ -228,9 +229,10 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 }
 
 # =========================
-# Peering Spoke -> Hub
+# Peering Spoke -> Hub（public のときのみ）
 # =========================
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
+  count                     = local.vnet_type_slug == "public" ? 1 : 0
   provider                  = azurerm.spoke
   name                      = local.name_vnetpeer_spoke2hub
   resource_group_name       = local.name_rg
@@ -241,10 +243,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   allow_gateway_transit   = false
   use_remote_gateways     = true
 
-  depends_on = [
-    azurerm_virtual_network.vnet,
-    azurerm_virtual_network_peering.hub_to_spoke
-  ]
+  depends_on = [azurerm_virtual_network.vnet]
 }
 
 # =========================
