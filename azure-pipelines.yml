@@ -2,23 +2,17 @@ parameters:
 - name: environment_id
   type: string
   default: dev
-  values:
-  - cmn
-  - dev
-  - stg
-  - prd
+  values: [cmn, dev, stg, prd]
 - name: project_name
   type: string
   default: ""
 - name: email
   type: string
-  default: ""     # 任意
+  default: ""
 - name: vnet_type
   type: string
   default: private
-  values:
-  - private
-  - public
+  values: [private, public]
 
 trigger: none
 pr: none
@@ -33,9 +27,6 @@ variables:
     value: true
   - name: azureServiceConnection
     value: snp-pipeline-api-wif
-  # 分岐用に parameters を variables に反映（条件式で利用）
-  - name: vnet_type
-    value: ${{ parameters.vnet_type }}
 
 stages:
 - stage: provision_all
@@ -111,24 +102,15 @@ stages:
                 { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
                 { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
               )) {
-                try {
-                  $v = & $cmd
-                  if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() }
-                } catch {}
+                try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {}
               }
               return ""
             }
             function Wait-For-ARM([string]$SubId, [int]$Seconds = 240) {
               $tries = [Math]::Ceiling($Seconds / 10)
               for ($i=1; $i -le $tries; $i++) {
-                try {
-                  az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null
-                  Write-Host "[Step0] ARM visibility confirmed"
-                  return
-                } catch {
-                  Write-Host "[Step0] waiting ARM visibility... ($i/$tries)"
-                  Start-Sleep -Seconds 10
-                }
+                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null; Write-Host "[Step0] ARM visibility confirmed"; return }
+                catch { Write-Host "[Step0] waiting ARM visibility... ($i/$tries)"; Start-Sleep -Seconds 10 }
               }
               throw "Subscription not visible in ARM after $Seconds seconds: $SubId"
             }
@@ -138,7 +120,8 @@ stages:
                 $hit = az account list --refresh --query "[?id=='$SubId'].id" -o tsv
                 $tokenOk = $false
                 try { az account get-access-token --subscription $SubId -o none 2>$null; if ($LASTEXITCODE -eq 0) { $tokenOk = $true } } catch {}
-                if ($hit -and $tokenOk) { return }
+                if ($hit -and $tokenOk) { Write-Host "[Step0] Azure CLI visibility confirmed"; return }
+                Write-Host "[Step0] waiting Azure CLI visibility... ($i/$max)"
                 Start-Sleep -Seconds 15
               }
               throw "Azure CLI did not recognize subscription within $MaxMinutes minutes: $SubId"
@@ -148,7 +131,11 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # ... 既存 Step0 のロジック（省略） ...
+            # ...（既存の Step0 ロジック）...
+
+            # 最後に setvariable を出力
+            # Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
+            # Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
       # Step1: RG
       - task: AzureCLI@2
@@ -273,10 +260,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
 
-      # Step4: Peering（public のときだけ実施）
+      # Step4a: Peering Hub -> Spoke
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
-        condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
@@ -303,9 +289,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
+      # Step4b: Peering Spoke->Hub
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
-        condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
