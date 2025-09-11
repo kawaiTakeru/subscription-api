@@ -2,17 +2,23 @@ parameters:
 - name: environment_id
   type: string
   default: dev
-  values: [cmn, dev, stg, prd]
+  values:
+  - cmn
+  - dev
+  - stg
+  - prd
 - name: project_name
   type: string
   default: ""
 - name: email
   type: string
-  default: ""
+  default: ""     # 任意
 - name: vnet_type
   type: string
   default: private
-  values: [private, public]
+  values:
+  - private
+  - public
 
 trigger: none
 pr: none
@@ -62,6 +68,7 @@ stages:
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             Write-Host "[Step0] Terraform dir: $tfDir"
 
+            # === 受信パラメータ（JSON→Function→Pipeline）を最優先 ===
             $projectParam = "${{ parameters.project_name }}"
             Write-Host "[Step0] project_name from parameters: '$projectParam'"
             Write-Host "[Step0] environment_id from env: $env:TF_VAR_environment_id"
@@ -102,15 +109,24 @@ stages:
                 { az account alias show --name $Alias --query "properties.subscriptionId" -o tsv 2>$null },
                 { az resource show --ids "/providers/Microsoft.Subscription/aliases/$Alias" --api-version 2021-10-01 --query "properties.subscriptionId" -o tsv 2>$null }
               )) {
-                try { $v = & $cmd; if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() } } catch {}
+                try {
+                  $v = & $cmd
+                  if ($LASTEXITCODE -eq 0 -and $v) { return $v.Trim() }
+                } catch {}
               }
               return ""
             }
             function Wait-For-ARM([string]$SubId, [int]$Seconds = 240) {
               $tries = [Math]::Ceiling($Seconds / 10)
               for ($i=1; $i -le $tries; $i++) {
-                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null; Write-Host "[Step0] ARM visibility confirmed"; return }
-                catch { Write-Host "[Step0] waiting ARM visibility... ($i/$tries)"; Start-Sleep -Seconds 10 }
+                try {
+                  az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null
+                  Write-Host "[Step0] ARM visibility confirmed"
+                  return
+                } catch {
+                  Write-Host "[Step0] waiting ARM visibility... ($i/$tries)"
+                  Start-Sleep -Seconds 10
+                }
               }
               throw "Subscription not visible in ARM after $Seconds seconds: $SubId"
             }
@@ -120,7 +136,10 @@ stages:
                 $hit = az account list --refresh --query "[?id=='$SubId'].id" -o tsv
                 $tokenOk = $false
                 try { az account get-access-token --subscription $SubId -o none 2>$null; if ($LASTEXITCODE -eq 0) { $tokenOk = $true } } catch {}
-                if ($hit -and $tokenOk) { Write-Host "[Step0] Azure CLI visibility confirmed"; return }
+                if ($hit -and $tokenOk) {
+                  Write-Host "[Step0] Azure CLI visibility confirmed"
+                  return
+                }
                 Write-Host "[Step0] waiting Azure CLI visibility... ($i/$max)"
                 Start-Sleep -Seconds 15
               }
@@ -131,9 +150,9 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             if (-not (Test-Path $tfvars)) { throw "terraform.tfvars missing." }
 
-            # ...（既存の Step0 ロジック）...
+            # 以降: 既存ロジックのまま（省略）
 
-            # 最後に setvariable を出力
+            # パイプライン変数設定（最終）
             # Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             # Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
@@ -147,7 +166,6 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -157,9 +175,10 @@ stages:
           inlineScript: |
             $ErrorActionPreference='Stop'
             $subId = $env:ARM_SUBSCRIPTION_ID
-            Write-Host "DEBUG SUBSCRIPTION from env: $subId"
-            Write-Host "DEBUG project_name from env: $env:TF_VAR_project_name"
-            Write-Host "DEBUG environment_id from env: $env:TF_VAR_environment_id"
+            if (-not $subId) { throw "finalSpokeSubscriptionId is empty. Check Step0." }
+            Write-Host "DEBUG SUBSCRIPTION: $subId"
+            Write-Host "DEBUG project_name: $env:TF_VAR_project_name"
+            Write-Host "DEBUG environment_id: $env:TF_VAR_environment_id"
 
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
@@ -197,7 +216,6 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -232,7 +250,6 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -269,7 +286,6 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           hubSubscriptionId: $(hubSubscriptionId)
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
@@ -299,7 +315,6 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
