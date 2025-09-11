@@ -1,3 +1,7 @@
+#############################################
+# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+#############################################
+
 terraform {
   required_version = ">= 1.5.0"
   required_providers {
@@ -6,6 +10,7 @@ terraform {
   }
 }
 
+# HCL の制約に合わせて複数行ブロックに修正
 provider "azapi" {
   use_cli = true
   use_msi = false
@@ -37,13 +42,15 @@ locals {
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # base は従来通り
+  # base は従来通り「project + purpose + env + region + seq」
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # Subnet の <用途> 部だけ vnet_type を使用
+  # === 各リソース名 ===
   name_rg     = local.base != "" ? "rg-${local.base}"   : null
   name_vnet   = local.base != "" ? "vnet-${local.base}" : null
+
+  # Subnet の「用途」には vnet_type を使用
   name_subnet = local.project_slug != "" ? "snet-${local.project_slug}-${var.vnet_type}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
@@ -53,6 +60,7 @@ locals {
   name_vnetpeer_hub2spoke = local.project_slug != "" ? "perr-${local.project_slug}-hubtospoke-${var.environment_id}-${var.sequence}" : null
   name_vnetpeer_spoke2hub = local.project_slug != "" ? "perr-${local.project_slug}-spoketohub-${var.environment_id}-${var.sequence}" : null
 
+  # 以降（Subscription Alias / billingScope など）は元のまま…
   name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
   name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
@@ -73,6 +81,7 @@ locals {
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 }
 
+# Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = var.create_subscription && var.spoke_subscription_id == "" ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
