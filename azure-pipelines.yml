@@ -67,7 +67,6 @@ stages:
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             Write-Host "[Step0] Terraform dir: $tfDir"
 
-            # === 受信パラメータ ===
             $projectParam = "${{ parameters.project_name }}"
             Write-Host "[Step0] project_name: '$projectParam'"
             Write-Host "[Step0] environment_id: $env:TF_VAR_environment_id"
@@ -82,20 +81,6 @@ stages:
               if ($val -match "#") { $val = ($val -split "#")[0] }
               $val.Trim().Trim('"')
             }
-            function Slugify([string]$s) {
-              if (-not $s) { return "" }
-              $t = $s.Trim().ToLower()
-              $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
-              $t = $t -replace "[^0-9a-z\-]", "-"
-              return $t.Trim("-")
-            }
-            function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
-              $p1 = Slugify $project
-              $p2raw = Slugify $purpose
-              $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
-              $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-              return ($parts -join "-")
-            }
             function Get-SubscriptionIdFromAlias([string]$Alias) {
               if (-not $Alias) { return "" }
               foreach ($cmd in @(
@@ -109,7 +94,7 @@ stages:
             function Wait-For-ARM([string]$SubId, [int]$Seconds = 240) {
               $tries = [Math]::Ceiling($Seconds / 10)
               for ($i=1; $i -le $tries; $i++) {
-                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" | Out-Null; Write-Host "[Step0] ARM OK"; return }
+                try { az rest --method get --url "https://management.azure.com/subscriptions/$SubId?api-version=2020-01-01" -o none; return }
                 catch { Write-Host "[Step0] waiting ARM... ($i/$tries)"; Start-Sleep -Seconds 10 }
               }
               throw "Subscription not visible in ARM after $Seconds seconds: $SubId"
@@ -120,7 +105,7 @@ stages:
                 $hit = az account list --refresh --query "[?id=='$SubId'].id" -o tsv
                 $tokenOk = $false
                 try { az account get-access-token --subscription $SubId -o none 2>$null; if ($LASTEXITCODE -eq 0) { $tokenOk = $true } } catch {}
-                if ($hit -and $tokenOk) { Write-Host "[Step0] az cli OK"; return }
+                if ($hit -and $tokenOk) { return }
                 Write-Host "[Step0] waiting az cli... ($i/$max)"
                 Start-Sleep -Seconds 15
               }
@@ -143,7 +128,7 @@ stages:
               $envId   = Get-TfVar $tfvars "environment_id"
               $rCode   = Get-TfVar $tfvars "region_code"
               $seq     = Get-TfVar $tfvars "sequence"
-              $base    = Build-Base $projectParam $purpose $envId $rCode $seq
+              $base    = "$($projectParam.ToLower())-$($purpose.ToLower())-$envId-$rCode-$seq"
               if (-not $aliasName) { $aliasName = "sub-$base" }
               if (-not $dispName)  { $dispName  = "sub-$base" }
             }
@@ -175,8 +160,6 @@ stages:
               }
             }
 
-            if (-not $finalSubId) { throw "final subscription id could not be resolved." }
-
             # 次ステップ用変数
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
@@ -205,11 +188,7 @@ stages:
             if (-not $subId) { throw "finalSpokeSubscriptionId is empty. Check Step0." }
             $ok = $false
             for ($i=1; $i -le 12; $i++) {
-              try {
-                az account set --subscription $subId
-                az account get-access-token --subscription $subId -o none
-                if ($LASTEXITCODE -eq 0) { $ok = $true; break }
-              } catch {}
+              try { az account set --subscription $subId; az account get-access-token --subscription $subId -o none; if ($LASTEXITCODE -eq 0) { $ok = $true; break } } catch {}
               Start-Sleep -Seconds 10
             }
             if (-not $ok) { throw "Azure CLI is not ready for subscription: $subId" }
@@ -218,10 +197,7 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
@@ -253,10 +229,7 @@ stages:
               terraform init -no-color -input=false
               if ("$(USE_TARGETED_APPLY)" -eq "true") {
                 terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network.vnet
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
@@ -291,17 +264,14 @@ stages:
                   -target azurerm_network_security_group.subnet_nsg `
                   -target azurerm_subnet.subnet `
                   -target azurerm_subnet_network_security_group_association.subnet_assoc
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Targeted apply failed; fallback full apply"
-                  terraform apply -no-color -input=false -auto-approve
-                }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Targeted apply failed; fallback full apply"; terraform apply -no-color -input=false -auto-approve }
               } else {
                 terraform apply -no-color -input=false -auto-approve
               }
               if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
             } finally { Pop-Location }
 
-      # Step4a: Peering Hub -> Spoke（private のときのみ実行）
+      # Step4a: Peering Hub -> Spoke（private のときのみ）
       - task: AzureCLI@2
         displayName: Step4a - Peering Hub->Spoke
         condition: and(succeeded(), eq('${{ parameters.vnet_type }}','private'))
@@ -331,7 +301,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step4b: Peering Spoke->Hub（private のときのみ実行）
+      # Step4b: Peering Spoke->Hub（private のときのみ）
       - task: AzureCLI@2
         displayName: Step4b - Peering Spoke->Hub
         condition: and(succeeded(), eq('${{ parameters.vnet_type }}','private'))
