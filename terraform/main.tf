@@ -37,22 +37,18 @@ provider "azurerm" {
 }
 
 locals {
-  # Subscription creation flow
   need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
   )
 
-  # 命名: 入力正規化（前後空白除去）
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
-  # スラッグ化（regex を使わない単純置換 + 小文字化）
   project_slug_base = lower(replace(replace(replace(replace(replace(local.project_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
   purpose_slug_base = lower(replace(replace(replace(replace(replace(local.purpose_raw, " ", "-"), "_", "-"), ".", "-"), "/", "-"), "\\", "-"))
 
-  # フォールバック（日本語などで空になった場合）
   project_slug = local.project_slug_base
   purpose_slug = length(local.purpose_slug_base) > 0 ? local.purpose_slug_base : (
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
@@ -61,7 +57,6 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # 既存リソース名
   name_rg                  = local.base != "" ? "rg-${local.base}" : null
   name_vnet                = local.base != "" ? "vnet-${local.base}" : null
   name_subnet              = local.base != "" ? "snet-${local.base}" : null
@@ -71,21 +66,16 @@ locals {
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # Bastion 用 NSG 名（ご指定の命名規則）
-  # nsg-<PJ/案件名>-<vnettype>-bastion-<環境識別子>-<リージョン略号>-<識別番号>
+  # Bastion NSG 名
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # ルートテーブル命名（rt-<base>）
   name_route_table = local.base != "" ? "rt-${local.base}" : null
-  # UDR 命名（er/kmslicense）
+  # UDR 命名
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
-
-  # サブスクリプション命名
-  name_sub_alias   = var.subscription_alias_name   != "" ? var.subscription_alias_name   : (local.base != "" ? "sub-${local.base}" : "")
-  name_sub_display = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
 
   # Billing Scope（MCA）
   billing_scope = (
@@ -94,9 +84,8 @@ locals {
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # Subscription Alias properties
   sub_properties_base = {
-    displayName  = local.name_sub_display
+    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
     workload     = var.subscription_workload
     billingScope = local.billing_scope
   }
@@ -105,90 +94,97 @@ locals {
   } : {}
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 
-  # 区分
+  # public/private
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion NSG 生成補助
   # 受信 443 許可元（public=Internet / private=指定レンジ）
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # Bastion 向けカスタムルール一覧
-  # ポイント: Azure 要件「GatewayManager -> 443/TCP Inbound」を追加（優先度100）
-  #           従来の 443 許可は優先度110に変更し併存
-  bastion_nsg_rules = concat(
-    [
-      {
-        name   = "AllowGatewayManagerInbound"
-        prio   = 100
-        dir    = "Inbound"
-        acc    = "Allow"
-        proto  = "Tcp"
-        src    = "GatewayManager"
-        dst    = "*"
-        dports = ["443"]
-      },
-      {
-        name   = "AllowHttpsInbound"
-        prio   = 110
-        dir    = "Inbound"
-        acc    = "Allow"
-        proto  = "Tcp"
-        src    = local.bastion_https_source
-        dst    = "*"
-        dports = ["443"]
-      }
-    ],
-    local.is_public ? [
-      {
-        name   = "AllowSshRdpOutbound"
-        prio   = 100
-        dir    = "Outbound"
-        acc    = "Allow"
-        proto  = "*"
-        src    = "*"
-        dst    = "VirtualNetwork"
-        dports = ["22","3389"]
-      },
-      {
-        name   = "AllowAzureCloudOutbound"
-        prio   = 110
-        dir    = "Outbound"
-        acc    = "Allow"
-        proto  = "Tcp"
-        src    = "*"
-        dst    = "AzureCloud"
-        dports = ["443"]
-      },
-      {
-        name   = "AllowBastionCommunicationOutbound"
-        prio   = 120
-        dir    = "Outbound"
-        acc    = "Allow"
-        proto  = "*"
-        src    = "VirtualNetwork"
-        dst    = "VirtualNetwork"
-        dports = ["8080","5701"]
-      },
-      {
-        name   = "AllowHttpOutbound"
-        prio   = 130
-        dir    = "Outbound"
-        acc    = "Allow"
-        proto  = "*"
-        src    = "*"
-        dst    = "Internet"
-        dports = ["80"]
-      }
-    ] : []
-  )
+  # Bastion 用 NSG ルール（必須を常時有効）
+  bastion_nsg_rules = [
+    # Inbound - 必須
+    {
+      name   = "AllowGatewayManagerInbound"
+      prio   = 100
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "GatewayManager"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowAzureLoadBalancerInbound"
+      prio   = 105
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["443"]
+    },
+    # Inbound - 任意（ご要件維持）
+    {
+      name   = "AllowHttpsInbound"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = local.bastion_https_source
+      dst    = "*"
+      dports = ["443"]
+    },
+
+    # Outbound - 必須（常時）
+    {
+      name   = "AllowSshRdpOutbound"
+      prio   = 200
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "VirtualNetwork"
+      dports = ["22","3389"]
+    },
+    {
+      name   = "AllowAzureCloudOutbound"
+      prio   = 210
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "*"
+      dst    = "AzureCloud"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionCommunicationOutbound"
+      prio   = 220
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080","5701"]
+    },
+    {
+      name   = "AllowHttpOutbound"
+      prio   = 230
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
+      dports = ["80"]
+    }
+  ]
 }
 
 # Subscription Alias（必要時のみ）
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
   parent_id = "/"
 
   body = jsonencode({
@@ -212,7 +208,7 @@ resource "azapi_resource" "subscription" {
 data "azapi_resource" "subscription_get" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = local.name_sub_alias
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
   parent_id = "/"
   response_export_values = ["properties.subscriptionId"]
   depends_on = [azapi_resource.subscription]
@@ -238,7 +234,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
-# NSG（業務用）
+# 既存 NSG（業務用）
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -270,7 +266,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# Bastion 専用 NSG
+# Bastion 専用 NSG（修正: 必須ルール常時）
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
@@ -306,7 +302,7 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
-# Subnet（Azure Bastion 用・固定名）
+# Subnet（Azure Bastion 用）
 resource "azurerm_subnet" "bastion_subnet" {
   provider             = azurerm.spoke
   name                 = "AzureBastionSubnet"
@@ -425,7 +421,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# Debug outputs（Terraform が見ている値を可視化）
+# Debug outputs
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
