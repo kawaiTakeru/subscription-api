@@ -59,6 +59,7 @@ stages:
           TF_IN_AUTOMATION: 'true'
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
         inputs:
           azureSubscription: $(azureServiceConnection)
           scriptType: pscore
@@ -264,6 +265,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -313,6 +315,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -347,6 +350,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -383,6 +387,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
@@ -411,6 +416,7 @@ stages:
           TF_VAR_create_subscription: false
           TF_VAR_project_name: ${{ parameters.project_name }}
           TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
           TF_INPUT: 'false'
           TF_IN_AUTOMATION: 'true'
         inputs:
