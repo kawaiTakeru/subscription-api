@@ -9,13 +9,17 @@ parameters:
   - prd
 - name: project_name
   type: string
-  default: bft   # Functionから来れば上書きされる
+  default: bft
 - name: email
   type: string
-  default: ""     # 将来拡張用。現時点は受け取りのみ。
+  default: ""     # 任意
 - name: vnet_type
   type: string
-  default: ""     # 将来拡張用（'private' or 'public'）。現時点は受け取りのみ。
+  default: private
+  values:
+  - private
+  - public
+
 
 trigger: none
 pr: none
