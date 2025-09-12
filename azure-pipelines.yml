@@ -44,7 +44,7 @@ stages:
         inputs:
           terraformVersion: 1.7.5
 
-      # Step0: Subscription (create or reuse) - 既存のロジックを使用
+      # Step0: Subscription (create or reuse)
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
@@ -60,7 +60,6 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            # 既存 Step0 スクリプト（省略なしでご利用のもの）
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             function Get-TfVar {
               param([string]$Path,[string]$Key)
@@ -74,18 +73,12 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
-
-            # ここでは既存の create/reuse ロジックを実行（省略）
-            # 結果として $finalSubId に Spoke の Subscription ID を設定する
-
-            # 実装簡略のため、既存使用ケースを前提に tfvars から注入
             $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
             if (-not $finalSubId) { throw "spoke_subscription_id missing." }
-
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-      # Step1: RG（import 対応、フォールバック full apply をやめる）
+      # Step1: Resource Group
       - task: AzureCLI@2
         displayName: Step1 - Resource Group
         env:
@@ -128,7 +121,6 @@ stages:
               $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
               return ($parts -join "-")
             }
-
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             $projectParam = "${{ parameters.project_name }}"
@@ -139,7 +131,6 @@ stages:
             $base    = Build-Base $projectParam $purpose $envId $regionCode $seq
             $expectedRgName = "rg-$base"
             $rgId = "/subscriptions/$env:ARM_SUBSCRIPTION_ID/resourceGroups/$expectedRgName"
-
             Push-Location $tfDir
             try {
               terraform init -no-color -input=false
@@ -156,7 +147,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
 
-      # Step2: VNet（フォールバック full apply をやめる）
+      # Step2: VNet
       - task: AzureCLI@2
         displayName: Step2 - VNet
         env:
@@ -183,9 +174,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
-      # Step3: Subnet + NSG（フォールバック full apply をやめる）
+      # Step3a: Subnets only（CIDRを先に確定させる）
       - task: AzureCLI@2
-        displayName: Step3 - Subnet + NSG
+        displayName: Step3a - Subnets (Standard + AzureBastionSubnet)
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -207,13 +198,42 @@ stages:
             try {
               terraform init -no-color -input=false
               terraform apply -no-color -input=false -auto-approve `
-                -target azurerm_network_security_group.subnet_nsg `
                 -target azurerm_subnet.subnet `
-                -target azurerm_subnet_network_security_group_association.subnet_assoc `
+                -target azurerm_subnet.bastion_subnet
+              if ($LASTEXITCODE -ne 0) { throw "Subnets apply failed" }
+            } finally { Pop-Location }
+
+      # Step3b: NSGs and Associations（CIDRはStep3aで確定済みのため参照が安定）
+      - task: AzureCLI@2
+        displayName: Step3b - NSG + Associations
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            az account set --subscription $env:ARM_SUBSCRIPTION_ID
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              # 明示的に最新化してから NSG/Assoc を適用（CIDR参照の安定化）
+              terraform refresh -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve `
+                -target azurerm_network_security_group.subnet_nsg `
                 -target azurerm_network_security_group.bastion_nsg `
-                -target azurerm_subnet.bastion_subnet `
+                -target azurerm_subnet_network_security_group_association.subnet_assoc `
                 -target azurerm_subnet_network_security_group_association.bastion_assoc
-              if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
+              if ($LASTEXITCODE -ne 0) { throw "NSG/Association apply failed" }
             } finally { Pop-Location }
 
       # Step4: Route Table（private のみ）
@@ -250,7 +270,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
             } finally { Pop-Location }
 
-      # Step5a: Peering Hub -> Spoke（private のみ）
+      # Step5a: Peering Hub->Spoke（private のみ）
       - task: AzureCLI@2
         displayName: Step5a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
