@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Bastion NSG: 画像準拠 + Azure必須の最小ルールのみ追加）
+# main.tf（Bastion private に必須Inboundを追加済み）
 #############################################
 
 terraform {
@@ -73,7 +73,6 @@ locals {
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
 
-  # 課金
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
@@ -94,92 +93,92 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 用 NSG ルール
-  # 注意: 画像に記載の「既定ルール（65000/65001/65500）」は Azure が自動付与するため定義しない。
-  # Azure 側コンプライアンスのため、画像には無いが必須の「GatewayManager → 443/TCP」だけは明示的に追加する。
-
-  # public（画像 + 必須GMルール）
-  bastion_public_rules = tolist([
-    # Inbound（画像の 100）
+  # Bastion 用 NSG ルール（public は画像＋既に GM/ALB あり）
+  bastion_public_rules = [
     {
-      name  = "AllowHttpsInbound"
-      prio  = 100
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "Internet"
-      dst   = "*"
-      dports = ["443"]
-    },
-    # Inbound（Azure必須）
-    {
-      name  = "AllowGatewayManagerInbound"
-      prio  = 110
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "GatewayManager"
-      dst   = "*"
-      dports = ["443"]
-    },
-    # Inbound（画像では既定に含まれるが、明示しておく）
-    {
-      name  = "AllowAzureLoadBalancerInbound"
-      prio  = 120
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "AzureLoadBalancer"
-      dst   = "*"
-      dports = ["443"]
-    },
-
-    # Outbound（画像の 100/110/120/130）
-    {
-      name  = "AllowSshRdpOutbound"
-      prio  = 100
-      dir   = "Outbound"
-      acc   = "Allow"
-      proto = "*"
-      src   = "*"
-      dst   = "VirtualNetwork"
-      dports = ["22","3389"]
+      name      = "AllowHttpsInbound"
+      prio      = 100
+      dir       = "Inbound"
+      acc       = "Allow"
+      proto     = "Tcp"
+      src       = "Internet"
+      dst       = "*"
+      dports    = ["443"]
     },
     {
-      name  = "AllowAzureCloudOutbound"
-      prio  = 110
-      dir   = "Outbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "*"
-      dst   = "AzureCloud"
+      name   = "AllowGatewayManagerInbound"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "GatewayManager"
+      dst    = "*"
       dports = ["443"]
     },
     {
-      name  = "AllowBastionCommunicationOutbound"
-      prio  = 120
-      dir   = "Outbound"
-      acc   = "Allow"
-      proto = "*"
-      src   = "VirtualNetwork"
-      dst   = "VirtualNetwork"
+      name   = "AllowAzureLoadBalancerInbound"
+      prio   = 120
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionHostCommunicationInbound"
+      prio   = 130
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
       dports = ["8080","5701"]
     },
     {
-      name  = "AllowHttpOutbound"
-      prio  = 130
-      dir   = "Outbound"
-      acc   = "Allow"
-      proto = "*"
-      src   = "*"
-      dst   = "Internet"
+      name   = "AllowSshRdpOutbound"
+      prio   = 100
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "VirtualNetwork"
+      dports = ["22","3389"]
+    },
+    {
+      name   = "AllowAzureCloudOutbound"
+      prio   = 110
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "*"
+      dst    = "AzureCloud"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionCommunicationOutbound"
+      prio   = 120
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080","5701"]
+    },
+    {
+      name   = "AllowHttpOutbound"
+      prio   = 130
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
       dports = ["80"]
     }
-  ])
+  ]
 
-  # private（画像 + 必須GMルール。Outboundは画像どおりカスタム無し）
-  bastion_private_rules = tolist([
-    # Inbound（画像の 100）
+  # private: 画像 + Azure必須の Inbound 2本（GM/ALB）。Outbound は画像どおりカスタム無し
+  bastion_private_rules = [
     {
       name  = "AllowHttpsInbound"
       prio  = 100
@@ -190,7 +189,6 @@ locals {
       dst   = "*"
       dports = ["443"]
     },
-    # Inbound（Azure必須）
     {
       name  = "AllowGatewayManagerInbound"
       prio  = 110
@@ -201,7 +199,6 @@ locals {
       dst   = "*"
       dports = ["443"]
     },
-    # Inbound（画像では既定に含まれるが、明示しておく）
     {
       name  = "AllowAzureLoadBalancerInbound"
       prio  = 120
@@ -212,13 +209,11 @@ locals {
       dst   = "*"
       dports = ["443"]
     }
-    # Outbound は既定（65000/65001/65500）のみ
-  ])
+  ]
 
-  # 実際に適用する Bastion ルール
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
-  # 通常 Subnet 用 NSG（既存のまま）
+  # 通常 Subnet 用 NSG（現状踏襲）
   normal_nsg_rules = concat(
     [
       {
@@ -344,7 +339,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# Bastion 専用 NSG（画像準拠 + 必須最小ルール）
+# Bastion 専用 NSG
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
@@ -362,7 +357,7 @@ resource "azurerm_network_security_group" "bastion_nsg" {
       source_port_range           = "*"
       destination_port_ranges     = security_rule.value.dports
       source_address_prefix       = security_rule.value.src
-      destination_address_prefix  = security_rule.value.dst
+      destination_address_prefix  = try(security_rule.value.dst_prefix, security_rule.value.dst)
     }
   }
 }
@@ -418,7 +413,7 @@ resource "azurerm_route_table" "route_table_private" {
 
 resource "azurerm_route" "route_default_to_gateway" {
   count               = local.is_private ? 1 : 0
-  provider            = azurerm.spoke
+ a provider            = azurerm.spoke
   name                = local.name_udr_default
   resource_group_name = azurerm_resource_group.rg.name
   route_table_name    = azurerm_route_table.route_table_private[0].name
