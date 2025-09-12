@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Bastion NSG を画像のカスタムルールのみに簡素化）
+# main.tf（Bastion NSG: 画像準拠 + Azure必須の最小ルールのみ追加）
 #############################################
 
 terraform {
@@ -94,11 +94,13 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 用 NSG ルール（画像のカスタム分のみ定義。既定ルール65000/65001/65500はAzureが自動付与）
-  # public: Inbound 100 AllowHttpsInbound from Internet
-  #         Outbound 100/110/120/130 の4本（22,3389→VNet / 443→AzureCloud / 8080,5701 VNet↔VNet / 80→Internet）
+  # Bastion 用 NSG ルール
+  # 注意: 画像に記載の「既定ルール（65000/65001/65500）」は Azure が自動付与するため定義しない。
+  # Azure 側コンプライアンスのため、画像には無いが必須の「GatewayManager → 443/TCP」だけは明示的に追加する。
+
+  # public（画像 + 必須GMルール）
   bastion_public_rules = tolist([
-    # Inbound（画像どおり）
+    # Inbound（画像の 100）
     {
       name  = "AllowHttpsInbound"
       prio  = 100
@@ -109,7 +111,30 @@ locals {
       dst   = "*"
       dports = ["443"]
     },
-    # Outbound（画像どおり）
+    # Inbound（Azure必須）
+    {
+      name  = "AllowGatewayManagerInbound"
+      prio  = 110
+      dir   = "Inbound"
+      acc   = "Allow"
+      proto = "Tcp"
+      src   = "GatewayManager"
+      dst   = "*"
+      dports = ["443"]
+    },
+    # Inbound（画像では既定に含まれるが、明示しておく）
+    {
+      name  = "AllowAzureLoadBalancerInbound"
+      prio  = 120
+      dir   = "Inbound"
+      acc   = "Allow"
+      proto = "Tcp"
+      src   = "AzureLoadBalancer"
+      dst   = "*"
+      dports = ["443"]
+    },
+
+    # Outbound（画像の 100/110/120/130）
     {
       name  = "AllowSshRdpOutbound"
       prio  = 100
@@ -152,8 +177,9 @@ locals {
     }
   ])
 
-  # private: Inbound 100 AllowHttpsInbound（社内レンジ → 443）以外は画像ではカスタムなし
+  # private（画像 + 必須GMルール。Outboundは画像どおりカスタム無し）
   bastion_private_rules = tolist([
+    # Inbound（画像の 100）
     {
       name  = "AllowHttpsInbound"
       prio  = 100
@@ -163,10 +189,33 @@ locals {
       src   = var.vpn_client_pool_cidr
       dst   = "*"
       dports = ["443"]
+    },
+    # Inbound（Azure必須）
+    {
+      name  = "AllowGatewayManagerInbound"
+      prio  = 110
+      dir   = "Inbound"
+      acc   = "Allow"
+      proto = "Tcp"
+      src   = "GatewayManager"
+      dst   = "*"
+      dports = ["443"]
+    },
+    # Inbound（画像では既定に含まれるが、明示しておく）
+    {
+      name  = "AllowAzureLoadBalancerInbound"
+      prio  = 120
+      dir   = "Inbound"
+      acc   = "Allow"
+      proto = "Tcp"
+      src   = "AzureLoadBalancer"
+      dst   = "*"
+      dports = ["443"]
     }
+    # Outbound は既定（65000/65001/65500）のみ
   ])
 
-  # Bastion 用 NSGに適用するルール群
+  # 実際に適用する Bastion ルール
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
   # 通常 Subnet 用 NSG（既存のまま）
@@ -295,7 +344,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# Bastion 専用 NSG（画像のカスタムルールのみ定義）
+# Bastion 専用 NSG（画像準拠 + 必須最小ルール）
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
