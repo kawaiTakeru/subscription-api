@@ -111,7 +111,7 @@ locals {
       proto     = "Tcp"
       src       = "*"
       dst       = "*"   # 実際の宛先CIDRは dst_prefix を使用
-      dst_prefix= try(azurerm_subnet.bastion_subnet.address_prefixes[0], azurerm_subnet.bastion_subnet.address_prefix)
+      dst_prefix= azurerm_subnet.bastion_subnet.address_prefixes[0]  # v4: address_prefixes のみ
       dports    = ["3389","22"]
     },
     {
