@@ -675,7 +675,7 @@ resource "azurerm_role_management_policy" "contributor_role_rules" {
   }
 }
 
-# --- outputs（そのまま） ---
+
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
