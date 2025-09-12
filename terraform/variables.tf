@@ -187,3 +187,36 @@ variable "allowed_port" {
   type        = number
   default     = 3389
 }
+
+#############################################
+# PIM (Privileged Identity Management)
+#############################################
+variable "email" {
+  description = "Email address for PIM notifications"
+  type        = string
+  default     = ""
+}
+
+variable "pim_approvers" {
+  description = "List of user object IDs for PIM approval process"
+  type        = list(string)
+  default     = []
+}
+
+variable "pim_maximum_duration" {
+  description = "Maximum duration for PIM role elevation (ISO 8601 format)"
+  type        = string
+  default     = "PT4H"
+}
+
+variable "pim_require_approval_for_owner" {
+  description = "Whether to require approval for Owner role elevation"
+  type        = bool
+  default     = true
+}
+
+variable "pim_require_approval_for_contributor" {
+  description = "Whether to require approval for Contributor role elevation"
+  type        = bool
+  default     = false
+}
