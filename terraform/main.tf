@@ -37,7 +37,7 @@ provider "azurerm" {
 }
 
 locals {
-  # 新規サブスクリプション関連は常にfalseでOK（pipelineで既存を必ず渡すため）
+  # 新規サブスクリプション関連は常にfalse（pipelineで既存を必ず渡すため）
   need_create_subscription        = false
   effective_spoke_subscription_id = var.spoke_subscription_id
 
