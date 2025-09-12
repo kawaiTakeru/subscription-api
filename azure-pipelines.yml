@@ -79,7 +79,7 @@ stages:
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
       # Step0.5: PIM（Subscription作成後、RG前。PIMのみapply）
-      - task: AzureCLI@2
+            - task: AzureCLI@2
         displayName: Step0.5 - PIM Only
         env:
           ARM_USE_AZCLI_AUTH: 'true'
