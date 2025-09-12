@@ -424,6 +424,9 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
+# ... (既存リソース定義はそのまま) ...
+
+# Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
   name                      = local.name_vnetpeer_spoke2hub
@@ -441,30 +444,240 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# ======================
-# Step8: PIM（public/private問わず必ず作成）
-# ======================
-module "pim" {
-  source = "./modules/pim"
-  subscription_id = local.effective_spoke_subscription_id
+#########################################################
+# Step8: PIM（public/private問わず必ず作成、直書き）
+#########################################################
 
-  # 承認者グループIDリスト（例: 固定でもOK。可変ならvariables.tfでobject_idを受ける）
-  approvers = [
+# 承認グループIDを取得
+data "azuread_group" "ot_oprt_is_manager" {
+  display_name     = "ot-oprt-is-manager"
+  security_enabled = true
+}
+data "azuread_group" "ot_oprt_is_general" {
+  display_name     = "ot-oprt-is-general"
+  security_enabled = true
+}
+data "azuread_group" "ot_oprt_is_director" {
+  display_name     = "ot-oprt-is-director"
+  security_enabled = true
+}
+
+# サブスクリプション情報（id取得用）
+data "azurerm_subscription" "this" {
+  subscription_id = local.effective_spoke_subscription_id
+}
+
+# サブスクリプションOwnerロール定義
+data "azurerm_role_definition" "subs_owner" {
+  name  = "Owner"
+  scope = data.azurerm_subscription.this.id
+}
+
+# サブスクリプションContributorロール定義
+data "azurerm_role_definition" "subs_contributor" {
+  name  = "Contributor"
+  scope = data.azurerm_subscription.this.id
+}
+
+# 承認者リスト
+locals {
+  pim_approvers = [
     {
       type      = "Group"
-      object_id = data.azuread_group.ot-oprt-is-manager.object_id
+      object_id = data.azuread_group.ot_oprt_is_manager.object_id
     },
     {
       type      = "Group"
-      object_id = data.azuread_group.ot-oprt-is-general.object_id
+      object_id = data.azuread_group.ot_oprt_is_general.object_id
     },
     {
       type      = "Group"
-      object_id = data.azuread_group.ot-oprt-is-director.object_id
+      object_id = data.azuread_group.ot_oprt_is_director.object_id
     }
   ]
 }
 
+# OwnerロールのPIM設定
+resource "azurerm_role_management_policy" "owner_role_rules" {
+  scope              = data.azurerm_subscription.this.id
+  role_definition_id = data.azurerm_role_definition.subs_owner.id
+
+  activation_rules {
+    maximum_duration = "PT2H"
+    require_multifactor_authentication = false
+    required_conditional_access_authentication_context = null
+    require_justification = true
+    require_ticket_info   = false
+    require_approval      = true
+
+    approval_stage {
+      dynamic "primary_approver" {
+        for_each = local.pim_approvers
+        content {
+          type      = primary_approver.value.type
+          object_id = primary_approver.value.object_id
+        }
+      }
+    }
+  }
+
+  eligible_assignment_rules {
+    expiration_required = false
+    expire_after        = "P15D"
+  }
+
+  active_assignment_rules {
+    expiration_required = true
+    expire_after        = "P15D"
+    require_multifactor_authentication = true
+    require_justification = true
+  }
+
+  notification_rules {
+    eligible_assignments {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    active_assignments {
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    eligible_activations {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        notification_level    = "All"
+      }
+    }
+  }
+}
+
+# ContributorロールのPIM設定
+resource "azurerm_role_management_policy" "contributor_role_rules" {
+  scope              = data.azurerm_subscription.this.id
+  role_definition_id = data.azurerm_role_definition.subs_contributor.id
+
+  activation_rules {
+    maximum_duration = "PT8H"
+    require_multifactor_authentication = false
+    required_conditional_access_authentication_context = null
+    require_justification = true
+    require_ticket_info   = false
+    require_approval      = true
+
+    approval_stage {
+      dynamic "primary_approver" {
+        for_each = local.pim_approvers
+        content {
+          type      = primary_approver.value.type
+          object_id = primary_approver.value.object_id
+        }
+      }
+    }
+  }
+
+  eligible_assignment_rules {
+    expiration_required = false
+    expire_after        = "P15D"
+  }
+
+  active_assignment_rules {
+    expiration_required = true
+    expire_after        = "P15D"
+    require_multifactor_authentication = true
+    require_justification = true
+  }
+
+  notification_rules {
+    eligible_assignments {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    active_assignments {
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    eligible_activations {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        notification_level    = "All"
+      }
+    }
+  }
+}
+
+# --- outputs（そのまま） ---
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
