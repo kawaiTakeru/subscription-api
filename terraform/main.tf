@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Bastion NSG: private必須ルール追加 + 動的参照/型不一致解消）
+# main.tf（Bastion NSG: 動的参照を排除し、public/private 両方で安定動作）
 #############################################
 
 terraform {
@@ -96,6 +96,8 @@ locals {
 
   # Bastion 用 NSG ルール（全オブジェクトで同一キーを維持）
   # キー: name, prio, dir, acc, proto, src, dst, dports
+  # 重要: どちらのリストも tolist で list(object(...)) 型に固定し、条件式の型不一致を防止
+  # また、bastion_subnet の動的属性参照は一切しない（targeted apply でも安定化のため）
   bastion_public_rules = tolist([
     {
       name  = "AllowBastionInbound"
@@ -104,7 +106,7 @@ locals {
       acc   = "Allow"
       proto = "Tcp"
       src   = "*"
-      dst   = "*"          # 動的CIDR参照は行わない
+      dst   = "*"
       dports = ["3389","22"]
     },
     {
@@ -137,7 +139,7 @@ locals {
       dst   = "VirtualNetwork"
       dports = ["8080","5701"]
     },
-    # Outbound（画像1）
+    # Outbound（推奨ルール）
     {
       name  = "AllowSshRdpOutbound"
       prio  = 100
@@ -181,6 +183,7 @@ locals {
   ])
 
   # private（Azure 必須: GatewayManager/ALB 443 Inbound を含む）
+  # Outbound は既定ルールに委任（必要であれば後日追加可能）
   bastion_private_rules = tolist([
     {
       name  = "AllowHttpsInbound"
