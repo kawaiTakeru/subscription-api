@@ -101,11 +101,8 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion サブネット CIDR を安全に取得（IPAM で plan 時に未確定でも落ちないように）
-  bastion_subnet_cidr = can(azurerm_subnet.bastion_subnet.address_prefixes[0]) ? azurerm_subnet.bastion_subnet.address_prefixes[0] : null
-
   # 画像1/2に基づく Bastion 用 NSG ルール
-  # 既定ルール(65000/65001/65500)は Azure が自動付与のため Terraform では定義不要
+  # 既定ルール(65000/65001/65500)は Azure が自動付与するため Terraform では定義不要
   # 型不一致を避けるため、各要素（オブジェクト）のキーを完全一致させる
   # 全ルールのキー: name, prio, dir, acc, proto, src, dst, dports, use_bastion_subnet_cidr
 
@@ -118,7 +115,7 @@ locals {
       acc   = "Allow"
       proto = "Tcp"
       src   = "*"
-      dst   = "*"          # 宛先は use_bastion_subnet_cidr で置換
+      dst   = "*"          # 宛先は use_bastion_subnet_cidr で置換（変数から）
       dports = ["3389","22"]
       use_bastion_subnet_cidr = true
     },
@@ -378,10 +375,9 @@ resource "azurerm_network_security_group" "bastion_nsg" {
       source_port_range       = "*"
       destination_port_ranges = security_rule.value.dports
       source_address_prefix   = security_rule.value.src
-      # BastionSubnet の CIDR は plan 時に未知の可能性があるため、null 時は "*" にフォールバック
       destination_address_prefix = (
-        security_rule.value.use_bastion_subnet_cidr && local.bastion_subnet_cidr != null
-        ? local.bastion_subnet_cidr
+        security_rule.value.use_bastion_subnet_cidr
+        ? var.bastion_subnet_cidr_override
         : security_rule.value.dst
       )
     }
