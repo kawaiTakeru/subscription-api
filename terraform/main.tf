@@ -23,21 +23,21 @@ provider "azapi" {
 }
 
 provider "azurerm" {
-  alias           = "spoke"
-  features        {}
+  alias = "spoke"
+  features {}
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
-  alias           = "hub"
-  features        {}
+  alias = "hub"
+  features {}
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
 locals {
-  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
+  need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
     try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
@@ -57,12 +57,12 @@ locals {
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  name_rg                  = local.base != "" ? "rg-${local.base}" : null
-  name_vnet                = local.base != "" ? "vnet-${local.base}" : null
+  name_rg   = local.base != "" ? "rg-${local.base}" : null
+  name_vnet = local.base != "" ? "vnet-${local.base}" : null
 
   # Subnet/NSG
-  name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_subnet = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_nsg    = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
@@ -73,13 +73,13 @@ locals {
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # Bastion 命名（新規）
-  name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_host      = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # NAT Gateway 命名
-  name_natgw = local.project_slug != "" ? "natgw-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
-  name_natgw_pip = local.project_slug != "" ? "pip-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
-  name_natgw_prefix = local.project_slug != "" ? "prefix-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
+  name_natgw        = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
+  name_natgw_pip    = local.project_slug != "" ? "pip-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
+  name_natgw_prefix = local.project_slug != "" ? "ippre-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
 
   # ルートテーブル命名（rt-<base>）
   name_route_table = local.base != "" ? "rt-${local.base}" : null
@@ -157,7 +157,7 @@ locals {
       proto  = "*"
       src    = "*"
       dst    = "VirtualNetwork"
-      dports = ["22","3389"]
+      dports = ["22", "3389"]
     },
     {
       name   = "AllowAzureCloudOutbound"
@@ -177,7 +177,7 @@ locals {
       proto  = "*"
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
-      dports = ["8080","5701"]
+      dports = ["8080", "5701"]
     },
     {
       name   = "AllowHttpOutbound"
@@ -218,12 +218,12 @@ resource "azapi_resource" "subscription" {
 }
 
 data "azapi_resource" "subscription_get" {
-  count     = local.need_create_subscription ? 1 : 0
-  type      = "Microsoft.Subscription/aliases@2021-10-01"
-  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
-  parent_id = "/"
+  count                  = local.need_create_subscription ? 1 : 0
+  type                   = "Microsoft.Subscription/aliases@2021-10-01"
+  name                   = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
+  parent_id              = "/"
   response_export_values = ["properties.subscriptionId"]
-  depends_on = [azapi_resource.subscription]
+  depends_on             = [azapi_resource.subscription]
 }
 
 # RG
@@ -363,9 +363,9 @@ resource "azurerm_public_ip_prefix" "natgw_prefix" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  sku                 = "Standard"
-  prefix_length       = 31
-  ip_version          = "IPv4"
+  sku           = "Standard"
+  prefix_length = 31
+  ip_version    = "IPv4"
 }
 
 resource "azurerm_nat_gateway" "natgw" {
@@ -375,30 +375,30 @@ resource "azurerm_nat_gateway" "natgw" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  sku_name            = "Standard"
+  sku_name                = "Standard"
   idle_timeout_in_minutes = 4
   # ゾーンは未指定（zone redundancy: none）
 }
 
 resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
-  count                 = local.is_public ? 1 : 0
-  nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
-  public_ip_address_id  = azurerm_public_ip.natgw_pip[0].id
-  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip.natgw_pip]
+  count                = local.is_public ? 1 : 0
+  nat_gateway_id       = azurerm_nat_gateway.natgw[0].id
+  public_ip_address_id = azurerm_public_ip.natgw_pip[0].id
+  depends_on           = [azurerm_nat_gateway.natgw, azurerm_public_ip.natgw_pip]
 }
 
 resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
-  count                 = local.is_public ? 1 : 0
-  nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
-  public_ip_prefix_id   = azurerm_public_ip_prefix.natgw_prefix[0].id
-  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip_prefix.natgw_prefix]
+  count               = local.is_public ? 1 : 0
+  nat_gateway_id      = azurerm_nat_gateway.natgw[0].id
+  public_ip_prefix_id = azurerm_public_ip_prefix.natgw_prefix[0].id
+  depends_on          = [azurerm_nat_gateway.natgw, azurerm_public_ip_prefix.natgw_prefix]
 }
 
 resource "azurerm_subnet_nat_gateway_association" "public_natgw_assoc" {
-  count                 = local.is_public ? 1 : 0
-  subnet_id             = azurerm_subnet.subnet.id
-  nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
-  depends_on            = [azurerm_subnet.subnet, azurerm_nat_gateway.natgw]
+  count          = local.is_public ? 1 : 0
+  subnet_id      = azurerm_subnet.subnet.id
+  nat_gateway_id = azurerm_nat_gateway.natgw[0].id
+  depends_on     = [azurerm_subnet.subnet, azurerm_nat_gateway.natgw]
 }
 
 # ======================
@@ -532,17 +532,17 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 # Debug outputs
-output "debug_project_name"  { value = var.project_name }
-output "debug_purpose_name"  { value = var.purpose_name }
-output "debug_project_slug"  { value = local.project_slug }
-output "debug_purpose_slug"  { value = local.purpose_slug }
-output "debug_base_parts"    { value = local.base_parts }
-output "base_naming"         { value = local.base }
-output "rg_expected_name"    { value = local.name_rg }
-output "vnet_expected_name"  { value = local.name_vnet }
-output "subscription_id"     { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
+output "debug_project_name" { value = var.project_name }
+output "debug_purpose_name" { value = var.purpose_name }
+output "debug_project_slug" { value = local.project_slug }
+output "debug_purpose_slug" { value = local.purpose_slug }
+output "debug_base_parts" { value = local.base_parts }
+output "base_naming" { value = local.base }
+output "rg_expected_name" { value = local.name_rg }
+output "vnet_expected_name" { value = local.name_vnet }
+output "subscription_id" { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name" { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name" { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
 output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
 
