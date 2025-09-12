@@ -24,14 +24,14 @@ provider "azapi" {
 
 provider "azurerm" {
   alias           = "spoke"
-  features        {}
+  features        {}  # 必須フィールドを追加
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
   alias           = "hub"
-  features        {}
+  features        {}  # 必須フィールドを追加
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
@@ -76,12 +76,12 @@ locals {
   name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # NAT Gateway 命名
-  name_natgw = local.project_slug != "" ? "natgw-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
+  # NAT Gateway 命名規則修正
+  name_natgw = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
   name_natgw_pip = local.project_slug != "" ? "pip-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
-  name_natgw_prefix = local.project_slug != "" ? "prefix-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
+  name_natgw_prefix = local.project_slug != "" ? "ippre-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
 
-  # ルートテーブル命名（rt-<base>）
+  # ルートテーブル命名
   name_route_table = local.base != "" ? "rt-${local.base}" : null
   # UDR 命名
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
@@ -377,21 +377,20 @@ resource "azurerm_nat_gateway" "natgw" {
 
   sku_name            = "Standard"
   idle_timeout_in_minutes = 4
-  # ゾーンは未指定（zone redundancy: none）
 }
 
 resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
   count                 = local.is_public ? 1 : 0
   nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
   public_ip_address_id  = azurerm_public_ip.natgw_pip[0].id
-  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip.natgw_pip]
+  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip.natgw_pip]  # 依存関係を明示
 }
 
 resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
   count                 = local.is_public ? 1 : 0
   nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
   public_ip_prefix_id   = azurerm_public_ip_prefix.natgw_prefix[0].id
-  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip_prefix.natgw_prefix]
+  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip_prefix.natgw_prefix]  # 依存関係を明示
 }
 
 resource "azurerm_subnet_nat_gateway_association" "public_natgw_assoc" {
