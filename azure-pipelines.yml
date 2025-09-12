@@ -44,7 +44,7 @@ stages:
         inputs:
           terraformVersion: 1.7.5
 
-      # Step0: Subscription (create or reuse) - 既存のロジックを使用
+      # Step0: Subscription (create or reuse)
       - task: AzureCLI@2
         name: step0
         displayName: Step0 - Subscription (create or reuse)
@@ -77,6 +77,35 @@ stages:
             if (-not $finalSubId) { throw "spoke_subscription_id missing." }
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
+
+      # Step0.5: PIM（Subscription作成後、RG前。PIMのみapply）
+      - task: AzureCLI@2
+        displayName: Step0.5 - PIM Only
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            az account set --subscription $env:ARM_SUBSCRIPTION_ID
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve `
+                -target=azurerm_role_management_policy.owner_role_rules `
+                -target=azurerm_role_management_policy.contributor_role_rules
+              if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
+            } finally { Pop-Location }
 
       # Step1: Resource Group
       - task: AzureCLI@2
@@ -328,30 +357,4 @@ stages:
               terraform init -no-color -input=false
               terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network_peering.spoke_to_hub
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
-            } finally { Pop-Location }
-
-      # Step8: PIM (all)
-      - task: AzureCLI@2
-        displayName: Step8 - PIM (all)
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_project_name: ${{ parameters.project_name }}
-          TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-          TF_INPUT: 'false'
-          TF_IN_AUTOMATION: 'true'
-        inputs:
-          azureSubscription: $(azureServiceConnection)
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription $env:ARM_SUBSCRIPTION_ID
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve -target=module.pim
-              if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
             } finally { Pop-Location }
