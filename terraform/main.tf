@@ -37,7 +37,7 @@ provider "azurerm" {
 }
 
 locals {
-  # 新規サブスクリプション関連は常にfalse（pipelineで既存を必ず渡すため）
+  # 新規サブスクリプション関連は常にfalse（pipelineで既存を必ず渡す）
   need_create_subscription        = false
   effective_spoke_subscription_id = var.spoke_subscription_id
 
@@ -424,8 +424,6 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
-# ... (既存リソース定義はそのまま) ...
-
 # Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
@@ -445,7 +443,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 #########################################################
-# Step8: PIM（public/private問わず必ず作成、直書き）
+# Step8: PIM（public/private)
 #########################################################
 
 # 承認グループIDを取得
