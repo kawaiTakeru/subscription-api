@@ -22,7 +22,7 @@ pool:
 
 variables:
   - name: System.Debug
-    value: true
+    value: false
   - name: USE_TARGETED_APPLY
     value: true
   - name: azureServiceConnection
