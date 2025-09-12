@@ -441,6 +441,30 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
+# ======================
+# Step8: PIM（public/private問わず必ず作成）
+# ======================
+module "pim" {
+  source = "./modules/pim"
+  subscription_id = local.effective_spoke_subscription_id
+
+  # 承認者グループIDリスト（例: 固定でもOK。可変ならvariables.tfでobject_idを受ける）
+  approvers = [
+    {
+      type      = "Group"
+      object_id = data.azuread_group.ot-oprt-is-manager.object_id
+    },
+    {
+      type      = "Group"
+      object_id = data.azuread_group.ot-oprt-is-general.object_id
+    },
+    {
+      type      = "Group"
+      object_id = data.azuread_group.ot-oprt-is-director.object_id
+    }
+  ]
+}
+
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
