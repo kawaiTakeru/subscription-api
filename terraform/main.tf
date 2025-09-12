@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Azure Bastion用NSGのprivate側ルールを追加）
+# main.tf（Azure Bastion用NSGのprivate側ルールを追加／public側のCIDR参照の属性修正）
 #############################################
 
 terraform {
@@ -97,21 +97,19 @@ locals {
   # 画像1/2に基づく Bastion 用 NSG ルール
   # 注意: Azure の既定ルール(65000/65001/65500)は自動付与のため定義不要
 
-  # public: 非閉域網（パブリックサブネット）nsg-<pj>-public-bastion-...
-  # - Inbound: 100/110/120/130
-  # - Outbound: 100/110/120/130（画像1どおり）
-  # AllowBastionInbound は宛先 = AzureBastionSubnet の CIDR
+  # public: 非閉域網（パブリックサブネット）
+  # AllowBastionInbound 宛先CIDRは AzureBastionSubnet を参照（address_prefixes のみ使用）
   bastion_public_rules = [
     {
-      name      = "AllowBastionInbound"
-      prio      = 100
-      dir       = "Inbound"
-      acc       = "Allow"
-      proto     = "Tcp"
-      src       = "*"
-      dst       = "*"   # 実際の宛先CIDRは dst_prefix を使用
-      dst_prefix= try(azurerm_subnet.bastion_subnet.address_prefixes[0], azurerm_subnet.bastion_subnet.address_prefix)
-      dports    = ["3389","22"]
+      name       = "AllowBastionInbound"
+      prio       = 100
+      dir        = "Inbound"
+      acc        = "Allow"
+      proto      = "Tcp"
+      src        = "*"
+      dst        = "*"
+      dst_prefix = azurerm_subnet.bastion_subnet.address_prefixes[0]
+      dports     = ["3389","22"]
     },
     {
       name   = "AllowGatewayManagerInbound"
@@ -186,8 +184,7 @@ locals {
     }
   ]
 
-  # private: 閉域網（AzureBastionSubnet）nsg-<pj>-private-bastion-...
-  # Azure 必須ルールを追加（GatewayManager/ALB からの 443）
+  # private: 閉域網（AzureBastionSubnet）必須ルールを追加
   bastion_private_rules = [
     {
       name   = "AllowHttpsInbound"
@@ -224,7 +221,7 @@ locals {
   # 実際に適用する Bastion ルール
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
-  # 通常 Subnet 用 NSG（前回ご提示に合わせたものを保持）
+  # 通常 Subnet 用 NSG
   normal_nsg_rules = concat(
     [
       {
@@ -360,14 +357,14 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   dynamic "security_rule" {
     for_each = { for r in local.bastion_nsg_rules : r.name => r }
     content {
-      name                       = security_rule.value.name
-      priority                   = security_rule.value.prio
-      direction                  = security_rule.value.dir
-      access                     = security_rule.value.acc
-      protocol                   = security_rule.value.proto
-      source_port_range          = "*"
-      destination_port_ranges    = security_rule.value.dports
-      source_address_prefix      = security_rule.value.src
+      name                    = security_rule.value.name
+      priority                = security_rule.value.prio
+      direction               = security_rule.value.dir
+      access                  = security_rule.value.acc
+      protocol                = security_rule.value.proto
+      source_port_range       = "*"
+      destination_port_ranges = security_rule.value.dports
+      source_address_prefix   = security_rule.value.src
       destination_address_prefix = try(security_rule.value.dst_prefix, security_rule.value.dst)
     }
   }
