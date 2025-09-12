@@ -222,101 +222,15 @@ data "azapi_resource" "subscription_get" {
 }
 
 # --- PIM (Privileged Identity Management) ---
+module "pim" {
+  source = "./modules/pim"
 
-data "azurerm_role_definition" "owner" {
-  name  = "Owner"
-  scope = "/subscriptions/${var.spoke_subscription_id}"
-}
-
-data "azurerm_role_definition" "contributor" {
-  name  = "Contributor"
-  scope = "/subscriptions/${var.spoke_subscription_id}"
-}
-
-resource "azurerm_role_management_policy" "owner_role_rules" {
-  name  = "Owner-PIM-Policy"
-  scope = "/subscriptions/${var.spoke_subscription_id}"
-
-  enabled_rules = [
-    "JustInTimeAssignment",
-    "Approval",
-    "Notification",
-    "MfaOnElevation",
-    "Expiration"
-  ]
-
-  rule {
-    rule_type = "JustInTimeAssignment"
-    enabled   = true
-    maximum_grant_duration = "PT4H"
-  }
-  rule {
-    rule_type = "MfaOnElevation"
-    enabled   = true
-  }
-  rule {
-    rule_type = "Approval"
-    enabled   = true
-    approver  = [] # approverを指定する場合はここにuser objectIdなど
-  }
-  rule {
-    rule_type = "Notification"
-    enabled   = true
-    notification_recipients = [var.email]
-  }
-  rule {
-    rule_type = "Expiration"
-    enabled   = true
-    maximum_duration = "PT4H"
-  }
-}
-
-resource "azurerm_role_management_policy_assignment" "owner_role_rules" {
-  name                       = "Owner-PIM-Assignment"
-  scope                      = "/subscriptions/${var.spoke_subscription_id}"
-  role_definition_id         = data.azurerm_role_definition.owner.id
-  policy_assignment_enabled  = true
-  policy_id                  = azurerm_role_management_policy.owner_role_rules.id
-}
-
-resource "azurerm_role_management_policy" "contributor_role_rules" {
-  name  = "Contributor-PIM-Policy"
-  scope = "/subscriptions/${var.spoke_subscription_id}"
-
-  enabled_rules = [
-    "JustInTimeAssignment",
-    "MfaOnElevation",
-    "Notification",
-    "Expiration"
-  ]
-
-  rule {
-    rule_type = "JustInTimeAssignment"
-    enabled   = true
-    maximum_grant_duration = "PT4H"
-  }
-  rule {
-    rule_type = "MfaOnElevation"
-    enabled   = true
-  }
-  rule {
-    rule_type = "Notification"
-    enabled   = true
-    notification_recipients = [var.email]
-  }
-  rule {
-    rule_type = "Expiration"
-    enabled   = true
-    maximum_duration = "PT4H"
-  }
-}
-
-resource "azurerm_role_management_policy_assignment" "contributor_role_rules" {
-  name                       = "Contributor-PIM-Assignment"
-  scope                      = "/subscriptions/${var.spoke_subscription_id}"
-  role_definition_id         = data.azurerm_role_definition.contributor.id
-  policy_assignment_enabled  = true
-  policy_id                  = azurerm_role_management_policy.contributor_role_rules.id
+  subscription_id              = var.spoke_subscription_id
+  notification_recipients      = var.email != "" ? [var.email] : []
+  approvers                   = var.pim_approvers
+  maximum_duration            = var.pim_maximum_duration
+  require_approval_for_owner  = var.pim_require_approval_for_owner
+  require_approval_for_contributor = var.pim_require_approval_for_contributor
 }
 
 # --- End PIM ---

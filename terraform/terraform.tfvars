@@ -46,3 +46,12 @@ allowed_port         = 3389
 hub_subscription_id = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
 hub_rg_name         = "rg-test-hubnw-prd-jpe-001"
 hub_vnet_name       = "vnet-test-hubnw-prd-jpe-001"
+
+# ==============================
+# PIM (Privileged Identity Management)
+# ==============================
+email = "admin@example.com"  # Default email for PIM notifications
+pim_approvers = []           # List of user object IDs for approval (empty = no approval)
+pim_maximum_duration = "PT4H"  # 4 hours maximum elevation duration
+pim_require_approval_for_owner = true        # Owner role requires approval
+pim_require_approval_for_contributor = false # Contributor role no approval required
