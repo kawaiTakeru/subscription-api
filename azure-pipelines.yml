@@ -60,7 +60,6 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            # 既存 Step0 スクリプト（省略なし）
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             function Get-TfVar {
               param([string]$Path,[string]$Key)
@@ -74,11 +73,8 @@ stages:
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
-
-            # 実装簡略のため、既存使用ケースを前提に tfvars から注入
             $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
             if (-not $finalSubId) { throw "spoke_subscription_id missing." }
-
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
@@ -125,7 +121,6 @@ stages:
               $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
               return ($parts -join "-")
             }
-
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             $tfvars = Join-Path $tfDir "terraform.tfvars"
             $projectParam = "${{ parameters.project_name }}"
@@ -136,7 +131,6 @@ stages:
             $base    = Build-Base $projectParam $purpose $envId $regionCode $seq
             $expectedRgName = "rg-$base"
             $rgId = "/subscriptions/$env:ARM_SUBSCRIPTION_ID/resourceGroups/$expectedRgName"
-
             Push-Location $tfDir
             try {
               terraform init -no-color -input=false
@@ -247,44 +241,6 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
             } finally { Pop-Location }
 
-      # Step5: NAT Gateway（public のみ）
-      - task: AzureCLI@2
-        displayName: Step5 - NAT Gateway (public only)
-        condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
-        env:
-          ARM_USE_AZCLI_AUTH: 'true'
-          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
-          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-          TF_VAR_create_subscription: false
-          TF_VAR_project_name: ${{ parameters.project_name }}
-          TF_VAR_environment_id: ${{ parameters.environment_id }}
-          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-          TF_INPUT: 'false'
-          TF_IN_AUTOMATION: 'true'
-        inputs:
-          azureSubscription: $(azureServiceConnection)
-          scriptType: pscore
-          scriptLocation: inlineScript
-          inlineScript: |
-            $ErrorActionPreference='Stop'
-            az account set --subscription $env:ARM_SUBSCRIPTION_ID
-            Push-Location "$(Build.SourcesDirectory)/terraform"
-            try {
-              terraform init -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve -target azurerm_public_ip.natgw_pip
-              if ($LASTEXITCODE -ne 0) { throw "NATGW PIP creation failed" }
-              terraform apply -no-color -input=false -auto-approve -target azurerm_public_ip_prefix.natgw_prefix
-              if ($LASTEXITCODE -ne 0) { throw "Prefix creation failed" }
-              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway.natgw
-              if ($LASTEXITCODE -ne 0) { throw "NATGW creation failed" }
-              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway_public_ip_association.natgw_pip_assoc
-              if ($LASTEXITCODE -ne 0) { throw "PIP attach failed" }
-              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway_public_ip_prefix_association.natgw_prefix_assoc
-              if ($LASTEXITCODE -ne 0) { throw "Prefix attach failed" }
-              terraform apply -no-color -input=false -auto-approve -target azurerm_subnet_nat_gateway_association.public_natgw_assoc
-              if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
-            } finally { Pop-Location }
-
       # Step6: Bastion（public/private 共通）
       - task: AzureCLI@2
         displayName: Step6 - Bastion (all)
@@ -372,4 +328,30 @@ stages:
               terraform init -no-color -input=false
               terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network_peering.spoke_to_hub
               if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
+            } finally { Pop-Location }
+
+      # Step8: PIM (all)
+      - task: AzureCLI@2
+        displayName: Step8 - PIM (all)
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            az account set --subscription $env:ARM_SUBSCRIPTION_ID
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve -target=module.pim
+              if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
             } finally { Pop-Location }
