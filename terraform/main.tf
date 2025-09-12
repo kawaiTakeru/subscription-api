@@ -442,9 +442,8 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-#########################################################
+
 # Step8: PIM（public/private)
-#########################################################
 
 # 承認グループIDを取得
 data "azuread_group" "ot_oprt_is_manager" {
