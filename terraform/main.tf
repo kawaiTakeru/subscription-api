@@ -1,5 +1,6 @@
 #############################################
 # main.tf
+# 命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>
 #############################################
 
 terraform {
@@ -12,7 +13,7 @@ terraform {
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.44"
+      version = "~> 4.41"
     }
   }
 }
@@ -23,23 +24,25 @@ provider "azapi" {
 }
 
 provider "azurerm" {
-  features {}
   alias           = "spoke"
+  features        {}
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
-  features {}
   alias           = "hub"
+  features        {}
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
 locals {
-  # 新規サブスクリプション関連は常にfalse（pipelineで既存を必ず渡す）
-  need_create_subscription        = false
-  effective_spoke_subscription_id = var.spoke_subscription_id
+  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
+  effective_spoke_subscription_id = coalesce(
+    var.spoke_subscription_id,
+    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
+  )
 
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
@@ -67,14 +70,12 @@ locals {
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
   name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # NATGW/PIP命名を「ng」に統一
-  name_natgw     = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_pip = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
   name_route_table = local.base != "" ? "rt-${local.base}" : null
+
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
@@ -175,12 +176,48 @@ locals {
   ]
 }
 
+# Step0: サブスクリプション作成（必要時のみ）
+resource "azapi_resource" "subscription" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
+  parent_id = "/"
+
+  body = jsonencode({
+    properties = local.sub_properties
+  })
+
+  lifecycle {
+    precondition {
+      condition     = local.need_create_subscription ? local.billing_scope != null : true
+      error_message = "create_subscription=true の場合、billing_account_name / billing_profile_name / invoice_section_name を設定してください（billingScope 必須）。"
+    }
+  }
+
+  timeouts {
+    create = "30m"
+    read   = "5m"
+    delete = "30m"
+  }
+}
+
+data "azapi_resource" "subscription_get" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : (local.base != "" ? "sub-${local.base}" : "")
+  parent_id = "/"
+  response_export_values = ["properties.subscriptionId"]
+  depends_on = [azapi_resource.subscription]
+}
+
+# Step1: リソースグループ
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
 }
 
+# Step2: VNet
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -193,6 +230,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
+# Step3: サブネット/NSG
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -282,6 +320,7 @@ resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
+# Step4: Bastion
 resource "azurerm_public_ip" "bastion_pip" {
   provider            = azurerm.spoke
   name                = local.name_bastion_public_ip
@@ -315,46 +354,7 @@ resource "azurerm_bastion_host" "bastion" {
   tunneling_enabled      = false
 }
 
-# ======================
-# NAT Gateway（public のみ）
-# ======================
-resource "azurerm_public_ip" "natgw_pip" {
-  count               = local.is_public ? 1 : 0
-  provider            = azurerm.spoke
-  name                = local.name_natgw_pip
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  allocation_method = "Static"
-  sku               = "Standard"
-  ip_version        = "IPv4"
-}
-
-resource "azurerm_nat_gateway" "natgw" {
-  count               = local.is_public ? 1 : 0
-  provider            = azurerm.spoke
-  name                = local.name_natgw
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  sku_name                = "Standard"
-  idle_timeout_in_minutes = 4
-}
-
-resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
-  count                = local.is_public ? 1 : 0
-  provider             = azurerm.spoke
-  nat_gateway_id       = azurerm_nat_gateway.natgw[0].id
-  public_ip_address_id = azurerm_public_ip.natgw_pip[0].id
-}
-
-resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
-  count          = local.is_public ? 1 : 0
-  provider       = azurerm.spoke
-  subnet_id      = azurerm_subnet.subnet.id
-  nat_gateway_id = azurerm_nat_gateway.natgw[0].id
-}
-
+# Step5: ルートテーブル（private のみ）
 resource "azurerm_route_table" "route_table_private" {
   count               = local.is_private ? 1 : 0
   provider            = azurerm.spoke
@@ -410,6 +410,7 @@ resource "azurerm_subnet_route_table_association" "subnet_rt_assoc" {
   route_table_id = azurerm_route_table.route_table_private[0].id
 }
 
+# Step6: VNet Peering
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
@@ -424,7 +425,6 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   depends_on = [azurerm_virtual_network.vnet]
 }
 
-# Peering Spoke -> Hub
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   provider                  = azurerm.spoke
   name                      = local.name_vnetpeer_spoke2hub
@@ -442,10 +442,10 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
+#########################################################
+# Step7: PIM（public/private問わず必ず作成、直書き）
+#########################################################
 
-# Step8: PIM（public/private)
-
-# 承認グループIDを取得
 data "azuread_group" "ot_oprt_is_manager" {
   display_name     = "ot-oprt-is-manager"
   security_enabled = true
@@ -459,24 +459,20 @@ data "azuread_group" "ot_oprt_is_director" {
   security_enabled = true
 }
 
-# サブスクリプション情報（id取得用）
 data "azurerm_subscription" "this" {
   subscription_id = local.effective_spoke_subscription_id
 }
 
-# サブスクリプションOwnerロール定義
 data "azurerm_role_definition" "subs_owner" {
   name  = "Owner"
   scope = data.azurerm_subscription.this.id
 }
 
-# サブスクリプションContributorロール定義
 data "azurerm_role_definition" "subs_contributor" {
   name  = "Contributor"
   scope = data.azurerm_subscription.this.id
 }
 
-# 承認者リスト
 locals {
   pim_approvers = [
     {
@@ -674,7 +670,7 @@ resource "azurerm_role_management_policy" "contributor_role_rules" {
   }
 }
 
-
+# Step8: 各種出力
 output "debug_project_name"  { value = var.project_name }
 output "debug_purpose_name"  { value = var.purpose_name }
 output "debug_project_slug"  { value = local.project_slug }
@@ -690,5 +686,3 @@ output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_t
 output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
 output "bastion_host_id"     { value = azurerm_bastion_host.bastion.id }
 output "bastion_public_ip"   { value = azurerm_public_ip.bastion_pip.ip_address }
-output "natgw_id"            { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
-output "natgw_public_ip"     { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
