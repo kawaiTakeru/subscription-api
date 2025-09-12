@@ -60,7 +60,7 @@ stages:
           scriptLocation: inlineScript
           inlineScript: |
             $ErrorActionPreference='Stop'
-            # 既存 Step0 スクリプト（省略なしでご利用のもの）
+            # 既存 Step0 スクリプト（省略なし）
             $tfDir = "$(Build.SourcesDirectory)/terraform"
             function Get-TfVar {
               param([string]$Path,[string]$Key)
@@ -75,9 +75,6 @@ stages:
             $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
             if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
-            # ここでは既存の create/reuse ロジックを実行（省略）
-            # 結果として $finalSubId に Spoke の Subscription ID を設定する
-
             # 実装簡略のため、既存使用ケースを前提に tfvars から注入
             $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
             if (-not $finalSubId) { throw "spoke_subscription_id missing." }
@@ -85,7 +82,7 @@ stages:
             Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-      # Step1: RG（import 対応、フォールバック full apply をやめる）
+      # Step1: Resource Group
       - task: AzureCLI@2
         displayName: Step1 - Resource Group
         env:
@@ -156,7 +153,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
             } finally { Pop-Location }
 
-      # Step2: VNet（フォールバック full apply をやめる）
+      # Step2: VNet
       - task: AzureCLI@2
         displayName: Step2 - VNet
         env:
@@ -183,7 +180,7 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
-      # Step3: Subnet + NSG（フォールバック full apply をやめる）
+      # Step3: Subnet + NSG
       - task: AzureCLI@2
         displayName: Step3 - Subnet + NSG
         env:
@@ -250,10 +247,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
             } finally { Pop-Location }
 
-      # Step5: NAT Gateway（public のみ）
+      # Step6: Bastion（public/private 共通）
       - task: AzureCLI@2
-        displayName: Step5 - NAT Gateway (public only)
-        condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
+        displayName: Step6 - Bastion (all)
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -275,23 +271,18 @@ stages:
             try {
               terraform init -no-color -input=false
 
-              # 1) PIP / NATGW を先に作成
-              terraform apply -no-color -input=false -auto-approve `
-                -target azurerm_public_ip.natgw_pip `
-                -target azurerm_nat_gateway.natgw
-              if ($LASTEXITCODE -ne 0) { throw "NATGW/PIP creation failed" }
+              # 1) Bastion PIP
+              terraform apply -no-color -input=false -auto-approve -target azurerm_public_ip.bastion_pip
+              if ($LASTEXITCODE -ne 0) { throw "Bastion PIP creation failed" }
 
-              # 2) アソシエーションを逐次適用
-              terraform refresh -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve -parallelism=1 `
-                -target azurerm_nat_gateway_public_ip_association.natgw_pip_assoc `
-                -target azurerm_subnet_nat_gateway_association.subnet_natgw_assoc
-              if ($LASTEXITCODE -ne 0) { throw "NATGW associations failed" }
+              # 2) Bastion Host
+              terraform apply -no-color -input=false -auto-approve -target azurerm_bastion_host.bastion
+              if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
             } finally { Pop-Location }
 
-      # Step6a: Peering Hub -> Spoke（private のみ）
+      # Step7a: Peering Hub -> Spoke（private のみ）
       - task: AzureCLI@2
-        displayName: Step6a - Peering Hub->Spoke
+        displayName: Step7a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -317,9 +308,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step6b: Peering Spoke->Hub（private のみ）
+      # Step7b: Peering Spoke->Hub（private のみ）
       - task: AzureCLI@2
-        displayName: Step6b - Peering Spoke->Hub
+        displayName: Step7b - Peering Spoke->Hub
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
