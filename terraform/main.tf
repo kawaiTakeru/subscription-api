@@ -59,14 +59,18 @@ locals {
 
   name_rg                  = local.base != "" ? "rg-${local.base}" : null
   name_vnet                = local.base != "" ? "vnet-${local.base}" : null
-  name_subnet              = local.base != "" ? "snet-${local.base}" : null
-  name_nsg                 = local.base != "" ? "nsg-${local.base}" : null
+
+  # 修正: NSG/Subnet の命名に vnet_type を purpose_name の前に挿入
+  # 例) nsg-bftprivatetestv5-private-json-dev-jpe-001 / snet-bftprivatetestv5-private-json-dev-jpe-001
+  name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # Bastion NSG 名
+  # Bastion NSG 名（従来どおり）
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # ルートテーブル命名（rt-<base>）
