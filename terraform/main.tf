@@ -73,6 +73,10 @@ locals {
   # Bastion NSG 名（従来どおり）
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
+  # NATGW/PIP 命名（purpose は含めない）
+  name_nat_gateway     = local.project_slug != "" ? "natgw-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
   # ルートテーブル命名（rt-<base>）
   name_route_table = local.base != "" ? "rt-${local.base}" : null
   # UDR 命名
@@ -333,6 +337,48 @@ resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
+# ======================
+# NAT Gateway（public のみ）
+# ======================
+resource "azurerm_public_ip" "natgw_pip" {
+  count               = local.is_public ? 1 : 0
+  provider            = azurerm.spoke
+  name                = local.name_natgw_public_ip
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  allocation_method = "Static"
+  sku               = "Standard"
+  ip_version        = "IPv4"
+  # 可用性ゾーン: なし（zones 未指定）
+}
+
+resource "azurerm_nat_gateway" "natgw" {
+  count               = local.is_public ? 1 : 0
+  provider            = azurerm.spoke
+  name                = local.name_nat_gateway
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = 4
+  # 可用性ゾーン: なし（zones 未指定）
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
+  count                = local.is_public ? 1 : 0
+  provider             = azurerm.spoke
+  nat_gateway_id       = azurerm_nat_gateway.natgw[0].id
+  public_ip_address_id = azurerm_public_ip.natgw_pip[0].id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
+  count          = local.is_public ? 1 : 0
+  provider       = azurerm.spoke
+  subnet_id      = azurerm_subnet.subnet.id
+  nat_gateway_id = azurerm_nat_gateway.natgw[0].id
+}
+
 # Route Table（private のみ）
 resource "azurerm_route_table" "route_table_private" {
   count               = local.is_private ? 1 : 0
@@ -439,3 +485,11 @@ output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
 output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+
+# NATGW outputs（public のみ）
+output "natgw_id" {
+  value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null
+}
+output "natgw_public_ip" {
+  value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null
+}
