@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Subnet→NSGの段階実行に合わせて、CIDR参照をNSG内でのみ評価）
+# main.tf（Bastion NSG を画像のカスタムルールのみに簡素化）
 #############################################
 
 terraform {
@@ -73,6 +73,7 @@ locals {
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
 
+  # 課金
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
@@ -93,52 +94,22 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 用 NSG ルール（統一キー: name, prio, dir, acc, proto, src, dst, dports, use_bastion_subnet_cidr）
+  # Bastion 用 NSG ルール（画像のカスタム分のみ定義。既定ルール65000/65001/65500はAzureが自動付与）
+  # public: Inbound 100 AllowHttpsInbound from Internet
+  #         Outbound 100/110/120/130 の4本（22,3389→VNet / 443→AzureCloud / 8080,5701 VNet↔VNet / 80→Internet）
   bastion_public_rules = tolist([
+    # Inbound（画像どおり）
     {
-      name  = "AllowBastionInbound"
+      name  = "AllowHttpsInbound"
       prio  = 100
       dir   = "Inbound"
       acc   = "Allow"
       proto = "Tcp"
-      src   = "*"
-      dst   = "*"      # 宛先CIDRはNSGリソース内でのみ参照（address_prefixes[0]）
-      dports = ["3389","22"]
-      use_bastion_subnet_cidr = true
-    },
-    {
-      name  = "AllowGatewayManagerInbound"
-      prio  = 110
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "GatewayManager"
+      src   = "Internet"
       dst   = "*"
       dports = ["443"]
-      use_bastion_subnet_cidr = false
     },
-    {
-      name  = "AllowAzureLoadBalancerInbound"
-      prio  = 120
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "AzureLoadBalancer"
-      dst   = "*"
-      dports = ["443"]
-      use_bastion_subnet_cidr = false
-    },
-    {
-      name  = "AllowBastionHostCommunication"
-      prio  = 130
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "*"
-      src   = "VirtualNetwork"
-      dst   = "VirtualNetwork"
-      dports = ["8080","5701"]
-      use_bastion_subnet_cidr = false
-    },
+    # Outbound（画像どおり）
     {
       name  = "AllowSshRdpOutbound"
       prio  = 100
@@ -148,7 +119,6 @@ locals {
       src   = "*"
       dst   = "VirtualNetwork"
       dports = ["22","3389"]
-      use_bastion_subnet_cidr = false
     },
     {
       name  = "AllowAzureCloudOutbound"
@@ -159,7 +129,6 @@ locals {
       src   = "*"
       dst   = "AzureCloud"
       dports = ["443"]
-      use_bastion_subnet_cidr = false
     },
     {
       name  = "AllowBastionCommunicationOutbound"
@@ -170,7 +139,6 @@ locals {
       src   = "VirtualNetwork"
       dst   = "VirtualNetwork"
       dports = ["8080","5701"]
-      use_bastion_subnet_cidr = false
     },
     {
       name  = "AllowHttpOutbound"
@@ -181,11 +149,10 @@ locals {
       src   = "*"
       dst   = "Internet"
       dports = ["80"]
-      use_bastion_subnet_cidr = false
     }
   ])
 
-  # private（Azure必須: GatewayManager/ALB 443 Inbound を含む）
+  # private: Inbound 100 AllowHttpsInbound（社内レンジ → 443）以外は画像ではカスタムなし
   bastion_private_rules = tolist([
     {
       name  = "AllowHttpsInbound"
@@ -196,85 +163,59 @@ locals {
       src   = var.vpn_client_pool_cidr
       dst   = "*"
       dports = ["443"]
-      use_bastion_subnet_cidr = false
-    },
-    {
-      name  = "AllowGatewayManagerInbound"
-      prio  = 110
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "GatewayManager"
-      dst   = "*"
-      dports = ["443"]
-      use_bastion_subnet_cidr = false
-    },
-    {
-      name  = "AllowAzureLoadBalancerInbound"
-      prio  = 120
-      dir   = "Inbound"
-      acc   = "Allow"
-      proto = "Tcp"
-      src   = "AzureLoadBalancer"
-      dst   = "*"
-      dports = ["443"]
-      use_bastion_subnet_cidr = false
     }
   ])
 
+  # Bastion 用 NSGに適用するルール群
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
-  # 通常 Subnet 用 NSG（統一キー）
-  normal_nsg_rules = tolist(concat(
+  # 通常 Subnet 用 NSG（既存のまま）
+  normal_nsg_rules = concat(
     [
       {
-        name  = "AllowBastionInbound"
-        prio  = 100
-        dir   = "Inbound"
-        acc   = "Allow"
-        proto = "Tcp"
-        src   = "VirtualNetwork"
-        dst   = "*"
+        name   = "AllowBastionInbound"
+        prio   = 100
+        dir    = "Inbound"
+        acc    = "Allow"
+        proto  = "Tcp"
+        src    = "VirtualNetwork"
+        dst    = "*"
         dports = ["3389","22"]
-        use_bastion_subnet_cidr = false
       }
     ],
     local.is_public ? [
       {
-        name  = "AllowGatewayManagerInbound"
-        prio  = 110
-        dir   = "Inbound"
-        acc   = "Allow"
-        proto = "Tcp"
-        src   = "GatewayManager"
-        dst   = "*"
+        name   = "AllowGatewayManagerInbound"
+        prio   = 110
+        dir    = "Inbound"
+        acc    = "Allow"
+        proto  = "Tcp"
+        src    = "GatewayManager"
+        dst    = "*"
         dports = ["443"]
-        use_bastion_subnet_cidr = false
       },
       {
-        name  = "AllowAzureLoadBalancerInbound"
-        prio  = 120
-        dir   = "Inbound"
-        acc   = "Allow"
-        proto = "Tcp"
-        src   = "AzureLoadBalancer"
-        dst   = "*"
+        name   = "AllowAzureLoadBalancerInbound"
+        prio   = 120
+        dir    = "Inbound"
+        acc    = "Allow"
+        proto  = "Tcp"
+        src    = "AzureLoadBalancer"
+        dst    = "*"
         dports = ["443"]
-        use_bastion_subnet_cidr = false
       },
       {
-        name  = "AllowBastionHostCommunication"
-        prio  = 130
-        dir   = "Inbound"
-        acc   = "Allow"
-        proto = "*"
-        src   = "VirtualNetwork"
-        dst   = "VirtualNetwork"
+        name   = "AllowBastionHostCommunication"
+        prio   = 130
+        dir    = "Inbound"
+        acc    = "Allow"
+        proto  = "*"
+        src    = "VirtualNetwork"
+        dst    = "VirtualNetwork"
         dports = ["8080","5701"]
-        use_bastion_subnet_cidr = false
       }
     ] : []
-  ))
+  )
 }
 
 # Subscription Alias（必要時のみ）
@@ -341,20 +282,20 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   dynamic "security_rule" {
     for_each = { for r in local.normal_nsg_rules : r.name => r }
     content {
-      name                    = security_rule.value.name
-      priority                = security_rule.value.prio
-      direction               = security_rule.value.dir
-      access                  = security_rule.value.acc
-      protocol                = security_rule.value.proto
-      source_port_range       = "*"
-      destination_port_ranges = security_rule.value.dports
-      source_address_prefix   = security_rule.value.src
-      destination_address_prefix = security_rule.value.dst
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.prio
+      direction                  = security_rule.value.dir
+      access                     = security_rule.value.acc
+      protocol                   = security_rule.value.proto
+      source_port_range          = "*"
+      destination_port_ranges    = security_rule.value.dports
+      source_address_prefix      = security_rule.value.src
+      destination_address_prefix = try(security_rule.value.dst_prefix, security_rule.value.dst)
     }
   }
 }
 
-# Bastion 専用 NSG（CIDR参照はここでのみ評価）
+# Bastion 専用 NSG（画像のカスタムルールのみ定義）
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
@@ -364,19 +305,15 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   dynamic "security_rule" {
     for_each = { for r in local.bastion_nsg_rules : r.name => r }
     content {
-      name                    = security_rule.value.name
-      priority                = security_rule.value.prio
-      direction               = security_rule.value.dir
-      access                  = security_rule.value.acc
-      protocol                = security_rule.value.proto
-      source_port_range       = "*"
-      destination_port_ranges = security_rule.value.dports
-      source_address_prefix   = security_rule.value.src
-      destination_address_prefix = (
-        security_rule.value.use_bastion_subnet_cidr
-        ? azurerm_subnet.bastion_subnet.address_prefixes[0]
-        : security_rule.value.dst
-      )
+      name                        = security_rule.value.name
+      priority                    = security_rule.value.prio
+      direction                   = security_rule.value.dir
+      access                      = security_rule.value.acc
+      protocol                    = security_rule.value.proto
+      source_port_range           = "*"
+      destination_port_ranges     = security_rule.value.dports
+      source_address_prefix       = security_rule.value.src
+      destination_address_prefix  = security_rule.value.dst
     }
   }
 }
