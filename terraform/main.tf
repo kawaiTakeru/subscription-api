@@ -1,5 +1,5 @@
 #############################################
-# main.tf（NAT Gateway追加完了・エラー修正込・全体）
+# main.tf（NATGW命名修正＆エラー修正込・全体）
 #############################################
 
 terraform {
@@ -12,7 +12,7 @@ terraform {
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.41"
+      version = "~> 4.44"
     }
   }
 }
@@ -37,11 +37,9 @@ provider "azurerm" {
 }
 
 locals {
-  need_create_subscription        = var.create_subscription && var.spoke_subscription_id == ""
-  effective_spoke_subscription_id = coalesce(
-    var.spoke_subscription_id,
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
-  )
+  # 新規サブスクリプション関連は常にfalseでOK（pipelineで既存を必ず渡すため）
+  need_create_subscription        = false
+  effective_spoke_subscription_id = var.spoke_subscription_id
 
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
@@ -62,6 +60,7 @@ locals {
 
   name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
@@ -71,9 +70,9 @@ locals {
   name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # NATGWリソース名は「NATGW追加完了ファイル」に合わせる
-  name_nat_gateway     = local.project_slug != "" ? "natgw-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  # NATGW/PIP命名を「ng」に統一
+  name_natgw     = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_pip = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   name_route_table = local.base != "" ? "rt-${local.base}" : null
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
@@ -175,8 +174,6 @@ locals {
     }
   ]
 }
-
-# Subscription・データ取得リソース（省略：現状維持）
 
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
@@ -285,13 +282,46 @@ resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
+resource "azurerm_public_ip" "bastion_pip" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_public_ip
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  allocation_method = "Static"
+  sku               = "Standard"
+  ip_version        = "IPv4"
+}
+
+resource "azurerm_bastion_host" "bastion" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_host
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  sku         = "Standard"
+  scale_units = 2
+
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.bastion_subnet.id
+    public_ip_address_id = azurerm_public_ip.bastion_pip.id
+  }
+
+  copy_paste_enabled     = false
+  file_copy_enabled      = false
+  ip_connect_enabled     = false
+  shareable_link_enabled = false
+  tunneling_enabled      = false
+}
+
 # ======================
 # NAT Gateway（public のみ）
 # ======================
 resource "azurerm_public_ip" "natgw_pip" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
-  name                = local.name_natgw_public_ip
+  name                = local.name_natgw_pip
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
@@ -303,7 +333,7 @@ resource "azurerm_public_ip" "natgw_pip" {
 resource "azurerm_nat_gateway" "natgw" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
-  name                = local.name_nat_gateway
+  name                = local.name_natgw
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
@@ -325,7 +355,6 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
   nat_gateway_id = azurerm_nat_gateway.natgw[0].id
 }
 
-# Route Table（private のみ）
 resource "azurerm_route_table" "route_table_private" {
   count               = local.is_private ? 1 : 0
   provider            = azurerm.spoke
@@ -425,16 +454,7 @@ output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
 output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
-
-output "bastion_host_id" {
-  value = azurerm_bastion_host.bastion.id
-}
-output "bastion_public_ip" {
-  value = azurerm_public_ip.bastion_pip.ip_address
-}
-output "natgw_id" {
-  value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null
-}
-output "natgw_public_ip" {
-  value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null
-}
+output "bastion_host_id"     { value = azurerm_bastion_host.bastion.id }
+output "bastion_public_ip"   { value = azurerm_public_ip.bastion_pip.ip_address }
+output "natgw_id"            { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
+output "natgw_public_ip"     { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
