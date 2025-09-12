@@ -247,9 +247,47 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
             } finally { Pop-Location }
 
-      # Step5: Bastion（public/private 共通）
+      # Step5: NAT Gateway（public のみ）
       - task: AzureCLI@2
-        displayName: Step5 - Bastion (all)
+        displayName: Step5 - NAT Gateway (public only)
+        condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            az account set --subscription $env:ARM_SUBSCRIPTION_ID
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve -target azurerm_public_ip.natgw_pip
+              if ($LASTEXITCODE -ne 0) { throw "NATGW PIP creation failed" }
+              terraform apply -no-color -input=false -auto-approve -target azurerm_public_ip_prefix.natgw_prefix
+              if ($LASTEXITCODE -ne 0) { throw "Prefix creation failed" }
+              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway.natgw
+              if ($LASTEXITCODE -ne 0) { throw "NATGW creation failed" }
+              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway_public_ip_association.natgw_pip_assoc
+              if ($LASTEXITCODE -ne 0) { throw "PIP attach failed" }
+              terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway_public_ip_prefix_association.natgw_prefix_assoc
+              if ($LASTEXITCODE -ne 0) { throw "Prefix attach failed" }
+              terraform apply -no-color -input=false -auto-approve -target azurerm_subnet_nat_gateway_association.public_natgw_assoc
+              if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
+            } finally { Pop-Location }
+
+      # Step6: Bastion（public/private 共通）
+      - task: AzureCLI@2
+        displayName: Step6 - Bastion (all)
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -280,9 +318,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
             } finally { Pop-Location }
 
-      # Step6a: Peering Hub -> Spoke（private のみ）
+      # Step7a: Peering Hub -> Spoke（private のみ）
       - task: AzureCLI@2
-        displayName: Step6a - Peering Hub->Spoke
+        displayName: Step7a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -308,9 +346,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step6b: Peering Spoke->Hub（private のみ）
+      # Step7b: Peering Spoke->Hub（private のみ）
       - task: AzureCLI@2
-        displayName: Step6b - Peering Spoke->Hub
+        displayName: Step7b - Peering Spoke->Hub
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
