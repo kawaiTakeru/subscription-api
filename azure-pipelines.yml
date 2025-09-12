@@ -247,9 +247,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
             } finally { Pop-Location }
 
-      # Step6: Bastion（public/private 共通）
+      # Step5: Bastion（public/private 共通）
       - task: AzureCLI@2
-        displayName: Step6 - Bastion (all)
+        displayName: Step5 - Bastion (all)
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -280,9 +280,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
             } finally { Pop-Location }
 
-      # Step7a: Peering Hub -> Spoke（private のみ）
+      # Step6a: Peering Hub -> Spoke（private のみ）
       - task: AzureCLI@2
-        displayName: Step7a - Peering Hub->Spoke
+        displayName: Step6a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -308,9 +308,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step7b: Peering Spoke->Hub（private のみ）
+      # Step6b: Peering Spoke->Hub（private のみ）
       - task: AzureCLI@2
-        displayName: Step7b - Peering Spoke->Hub
+        displayName: Step6b - Peering Spoke->Hub
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
