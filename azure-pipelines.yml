@@ -14,8 +14,8 @@ parameters:
   default: private
   values: [private, public]
 
-trigger: none
-pr: none
+trigger: []
+pr: []
 
 pool:
   vmImage: windows-2022
@@ -79,7 +79,7 @@ stages:
             Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
       # Step0.5: PIM（Subscription作成後、RG前。PIMのみapply）
-            - task: AzureCLI@2
+      - task: AzureCLI@2
         displayName: Step0.5 - PIM Only
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -101,9 +101,7 @@ stages:
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
               terraform init -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve `
-                -target=azurerm_role_management_policy.owner_role_rules `
-                -target=azurerm_role_management_policy.contributor_role_rules
+              terraform apply -no-color -input=false -auto-approve -target=azurerm_role_management_policy.owner_role_rules -target=azurerm_role_management_policy.contributor_role_rules
               if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
             } finally { Pop-Location }
 
