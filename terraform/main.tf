@@ -1,6 +1,6 @@
-#############################################
-# main.tf
-#############################################
+# ===========================================================
+# main.tf 
+# ===========================================================
 
 terraform {
   required_version = ">= 1.5.0"
@@ -37,10 +37,11 @@ provider "azurerm" {
 }
 
 locals {
-  # 新規サブスクリプション関連は常にfalseでOK（pipelineで既存を必ず渡すため）
+  # サブスクリプション作成はパイプラインから既存を必ず渡すため常にfalse
   need_create_subscription        = false
   effective_spoke_subscription_id = var.spoke_subscription_id
 
+  # プロジェクト・用途名のスラグ化
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
@@ -52,34 +53,35 @@ locals {
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
+  # 命名規約生成用部品
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
+  # リソース命名
   name_rg                  = local.base != "" ? "rg-${local.base}" : null
   name_vnet                = local.base != "" ? "vnet-${local.base}" : null
-
   name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
   name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
   name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
   name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
   name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
-
-  name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_nsg         = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_host        = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_public_ip   = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # NATGW/PIP命名を「ng」に統一
   name_natgw     = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_natgw_pip = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
+  # ルートテーブル/UDR命名
   name_route_table = local.base != "" ? "rt-${local.base}" : null
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
 
+  # Billing Scope（MCA用）
   billing_scope = (
     var.billing_account_name != "" &&
     var.billing_profile_name != "" &&
@@ -96,11 +98,14 @@ locals {
   } : {}
   sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
 
+  # パブリック・プライベートVNet判定
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
+  # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
+  # Bastion用NSGルール定義
   bastion_nsg_rules = [
     {
       name   = "AllowGatewayManagerInbound"
@@ -175,12 +180,18 @@ locals {
   ]
 }
 
+# -----------------------------------------------------------
+# Resource Group
+# -----------------------------------------------------------
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
 }
 
+# -----------------------------------------------------------
+# Virtual Network
+# -----------------------------------------------------------
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -193,6 +204,9 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
+# -----------------------------------------------------------
+# NSG（業務用）
+# -----------------------------------------------------------
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -224,6 +238,9 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
+# -----------------------------------------------------------
+# Bastion用NSG
+# -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
@@ -246,6 +263,9 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   }
 }
 
+# -----------------------------------------------------------
+# Subnet（業務用）
+# -----------------------------------------------------------
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -258,6 +278,9 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
+# -----------------------------------------------------------
+# Subnet（Bastion用/AzureBastionSubnet）
+# -----------------------------------------------------------
 resource "azurerm_subnet" "bastion_subnet" {
   provider             = azurerm.spoke
   name                 = "AzureBastionSubnet"
@@ -270,6 +293,9 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
+# -----------------------------------------------------------
+# NSGアソシエーション
+# -----------------------------------------------------------
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
@@ -282,6 +308,9 @@ resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
+# -----------------------------------------------------------
+# Bastion Public IP
+# -----------------------------------------------------------
 resource "azurerm_public_ip" "bastion_pip" {
   provider            = azurerm.spoke
   name                = local.name_bastion_public_ip
@@ -293,6 +322,9 @@ resource "azurerm_public_ip" "bastion_pip" {
   ip_version        = "IPv4"
 }
 
+# -----------------------------------------------------------
+# Bastion Host
+# -----------------------------------------------------------
 resource "azurerm_bastion_host" "bastion" {
   provider            = azurerm.spoke
   name                = local.name_bastion_host
@@ -315,9 +347,9 @@ resource "azurerm_bastion_host" "bastion" {
   tunneling_enabled      = false
 }
 
-# ======================
-# NAT Gateway（public のみ）
-# ======================
+# -----------------------------------------------------------
+# NAT Gateway構成（パブリック環境のみ）
+# -----------------------------------------------------------
 resource "azurerm_public_ip" "natgw_pip" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
@@ -355,6 +387,9 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
   nat_gateway_id = azurerm_nat_gateway.natgw[0].id
 }
 
+# -----------------------------------------------------------
+# ルートテーブル・ルート（プライベート環境のみ）
+# -----------------------------------------------------------
 resource "azurerm_route_table" "route_table_private" {
   count               = local.is_private ? 1 : 0
   provider            = azurerm.spoke
@@ -410,6 +445,9 @@ resource "azurerm_subnet_route_table_association" "subnet_rt_assoc" {
   route_table_id = azurerm_route_table.route_table_private[0].id
 }
 
+# -----------------------------------------------------------
+# VNet Peering（Hub⇔Spoke）
+# -----------------------------------------------------------
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
@@ -441,20 +479,23 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-output "debug_project_name"  { value = var.project_name }
-output "debug_purpose_name"  { value = var.purpose_name }
-output "debug_project_slug"  { value = local.project_slug }
-output "debug_purpose_slug"  { value = local.purpose_slug }
-output "debug_base_parts"    { value = local.base_parts }
-output "base_naming"         { value = local.base }
-output "rg_expected_name"    { value = local.name_rg }
-output "vnet_expected_name"  { value = local.name_vnet }
-output "subscription_id"     { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "spoke_rg_name"       { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"     { value = azurerm_virtual_network.vnet.name }
-output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
-output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
-output "bastion_host_id"     { value = azurerm_bastion_host.bastion.id }
-output "bastion_public_ip"   { value = azurerm_public_ip.bastion_pip.ip_address }
-output "natgw_id"            { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
-output "natgw_public_ip"     { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
+# -----------------------------------------------------------
+# Outputs（デバッグ・確認用）
+# -----------------------------------------------------------
+output "debug_project_name"        { value = var.project_name }
+output "debug_purpose_name"        { value = var.purpose_name }
+output "debug_project_slug"        { value = local.project_slug }
+output "debug_purpose_slug"        { value = local.purpose_slug }
+output "debug_base_parts"          { value = local.base_parts }
+output "base_naming"               { value = local.base }
+output "rg_expected_name"          { value = local.name_rg }
+output "vnet_expected_name"        { value = local.name_vnet }
+output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id"   { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+output "bastion_host_id"           { value = azurerm_bastion_host.bastion.id }
+output "bastion_public_ip"         { value = azurerm_public_ip.bastion_pip.ip_address }
+output "natgw_id"                  { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
+output "natgw_public_ip"           { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
