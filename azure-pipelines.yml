@@ -174,9 +174,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
             } finally { Pop-Location }
 
-      # Step3a: Subnets only（CIDRを先に確定させる）
+      # Step3a: Subnets + NSGs（ルールまで作成）
       - task: AzureCLI@2
-        displayName: Step3a - Subnets (Standard + AzureBastionSubnet)
+        displayName: Step3a - Subnets + NSGs
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -197,15 +197,18 @@ stages:
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
               terraform init -no-color -input=false
+              # Subnets と NSGs を先に確定（Association は後続に分離）
               terraform apply -no-color -input=false -auto-approve `
                 -target azurerm_subnet.subnet `
-                -target azurerm_subnet.bastion_subnet
-              if ($LASTEXITCODE -ne 0) { throw "Subnets apply failed" }
+                -target azurerm_subnet.bastion_subnet `
+                -target azurerm_network_security_group.subnet_nsg `
+                -target azurerm_network_security_group.bastion_nsg
+              if ($LASTEXITCODE -ne 0) { throw "Step3a apply failed" }
             } finally { Pop-Location }
 
-      # Step3b: NSGs and Associations（CIDRはStep3aで確定済みのため参照が安定）
+      # Step3b: Associations（最新 state を refresh してから紐付けのみ）
       - task: AzureCLI@2
-        displayName: Step3b - NSG + Associations
+        displayName: Step3b - NSG Associations only
         env:
           ARM_USE_AZCLI_AUTH: 'true'
           ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -226,14 +229,12 @@ stages:
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
               terraform init -no-color -input=false
-              # 明示的に最新化してから NSG/Assoc を適用（CIDR参照の安定化）
               terraform refresh -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve `
-                -target azurerm_network_security_group.subnet_nsg `
-                -target azurerm_network_security_group.bastion_nsg `
+              # Association だけ適用（並行更新を避けるため parallelism=1）
+              terraform apply -no-color -input=false -auto-approve -parallelism=1 `
                 -target azurerm_subnet_network_security_group_association.subnet_assoc `
                 -target azurerm_subnet_network_security_group_association.bastion_assoc
-              if ($LASTEXITCODE -ne 0) { throw "NSG/Association apply failed" }
+              if ($LASTEXITCODE -ne 0) { throw "Step3b apply failed" }
             } finally { Pop-Location }
 
       # Step4: Route Table（private のみ）
