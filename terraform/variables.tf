@@ -1,7 +1,10 @@
-#############################################
-# Subscription (Stage0 相当)
-#############################################
-# 命名規約用 変数（<識別子>-<PJ>-<用途>-<環境>-<リージョン略>-<通番>）
+# ===========================================================
+# Subscription/Network/Peering/Bastion変数定義
+# ===========================================================
+
+# -----------------------------------------------------------
+# サブスクリプション・命名規約関連（Stage0相当）
+# -----------------------------------------------------------
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
@@ -35,139 +38,141 @@ variable "region_code" {
 }
 
 variable "sequence" {
-  description = "識別番号（ゼロ埋め文字列推奨: 001）"
+  description = "リソース名の通番（ゼロ埋め文字列推奨: 001）"
   type        = string
   default     = "001"
 }
 
-# サブスクリプション名（未指定なら自動生成: sub-<base>）
+# サブスクリプション生成時のエイリアス名（未指定時は命名規約で自動生成）
 variable "subscription_alias_name" {
-  description = "内部で使われるサブスクリプションエイリアス名（空なら命名規約で自動生成）"
+  description = "サブスクリプションエイリアス名（命名規約で自動生成可）"
   type        = string
   default     = ""
 }
 
+# サブスクリプションのポータル表示用名（未指定時は命名規約で自動生成）
 variable "subscription_display_name" {
-  description = "ポータル表示名（空なら命名規約で自動生成）"
+  description = "サブスクリプションのポータル表示名（命名規約で自動生成可）"
   type        = string
   default     = ""
 }
 
+# 課金系パラメータ（MCA用）
 variable "billing_account_name" {
   description = "課金アカウント名"
   type        = string
 }
-
 variable "billing_profile_name" {
   description = "課金プロファイル名"
   type        = string
 }
-
 variable "invoice_section_name" {
   description = "請求セクション名"
   type        = string
 }
 
+# Workload種別（Production / DevTest）
 variable "subscription_workload" {
-  description = "Workload 種別 (Production / DevTest)"
+  description = "Workload種別 (Production / DevTest)"
   type        = string
   default     = "Production"
 }
 
+# サブスクリプション新規作成フラグ（既存流用の場合はfalse）
 variable "create_subscription" {
-  description = "サブスクリプション(エイリアス)を新規作成するか (spoke_subscription_id 空の場合のみ有効)"
+  description = "サブスクリプション（エイリアス）新規作成可否"
   type        = bool
   default     = true
 }
 
+# 将来の拡張用（現状未使用）
 variable "enable_billing_check" {
-  description = "Billing 読み取りチェック (未使用: 将来拡張用)"
+  description = "課金情報の読み取りチェック（未使用／将来拡張用）"
   type        = bool
   default     = false
 }
 
+# SpokeサブスクリプションID（既存利用時に指定）
 variable "spoke_subscription_id" {
-  description = "既存 Spoke Subscription ID (既存利用時)。新規作成時は Step0 後に pipeline から注入"
+  description = "Spoke Subscription ID（既存利用時、pipeline注入）"
   type        = string
   default     = ""
 }
 
+# テナントID（必要に応じて）
 variable "spoke_tenant_id" {
-  description = "Spoke Tenant ID (必要に応じて)"
+  description = "Spoke Tenant ID（必要時のみ）"
   type        = string
   default     = ""
 }
 
+# 管理グループリソースID
 variable "management_group_id" {
-  description = "管理グループのリソースID (/providers/Microsoft.Management/managementGroups/<mg-name>)"
+  description = "管理グループのリソースID（/providers/Microsoft.Management/managementGroups/<mg-name>）"
   type        = string
   default     = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 }
 
-#############################################
-# Hub 側 (Peering 用)
-#############################################
+# -----------------------------------------------------------
+# Hub情報（Peering用）
+# -----------------------------------------------------------
 variable "hub_subscription_id" {
   description = "Hub Subscription ID"
   type        = string
 }
-
 variable "hub_tenant_id" {
-  description = "Hub Tenant ID (必要に応じて)"
+  description = "Hub Tenant ID（必要時のみ）"
   type        = string
   default     = ""
 }
-
 variable "hub_vnet_name" {
-  description = "Hub VNet name"
+  description = "Hub側のVNet名"
   type        = string
 }
-
 variable "hub_rg_name" {
-  description = "Hub Resource Group name"
+  description = "Hub側のリソースグループ名"
   type        = string
 }
 
-#############################################
-# Resource Group (Stage1)
-#############################################
+# -----------------------------------------------------------
+# Resource Group（Stage1）
+# -----------------------------------------------------------
 variable "region" {
-  description = "Azure region (例: japaneast)"
+  description = "Azure配置リージョン（例: japaneast）"
   type        = string
   default     = "japaneast"
 }
 
-#############################################
-# VNet (Stage2)
-#############################################
+# -----------------------------------------------------------
+# VNet（Stage2）
+# -----------------------------------------------------------
 variable "ipam_pool_id" {
-  description = "IPAM Pool Resource ID (VNet/Subnet 共用)"
+  description = "IPAM Pool Resource ID（VNet/Subnet共用）"
   type        = string
 }
-
 variable "vnet_number_of_ips" {
-  description = "VNet に割り当てたい IP 数 (例: 1024 ≒ /22)"
+  description = "VNetに割り当てるIP数（例: 1024≒/22）"
   type        = number
 }
 
-#############################################
-# Subnet + NSG (Stage3)
-#############################################
+# -----------------------------------------------------------
+# Subnet + NSG（Stage3）
+# -----------------------------------------------------------
 variable "subnet_number_of_ips" {
-  description = "Subnet に割り当てたい IP 数 (例: 256 ≒ /24)"
+  description = "Subnetに割り当てるIP数（例: 256≒/24）"
   type        = number
 }
 
-# Azure Bastion 用 Subnet の IP 数（推奨 /26 = 64 IP）
+# Bastion用SubnetのIP数（推奨/26=64 IP）
 variable "bastion_subnet_number_of_ips" {
-  description = "AzureBastionSubnet に割り当てたい IP 数 (推奨: 64 ≒ /26)"
+  description = "AzureBastionSubnetのIP数（推奨: 64≒/26）"
   type        = number
   default     = 64
 }
 
-# VNet Type（public / private）: Bastion 用 NSG の命名・ルール切替に使用
+# VNet種別（public/private）: Bastion NSG命名やルール切替に利用
 variable "vnet_type" {
-  description = "VNet Type（public / private）"
+  description = "VNet種別（public/private）"
   type        = string
   default     = "private"
 
@@ -177,13 +182,15 @@ variable "vnet_type" {
   }
 }
 
+# VPNクライアントプールCIDR（許可元）
 variable "vpn_client_pool_cidr" {
-  description = "VPN クライアントプール CIDR (許可元)"
+  description = "VPNクライアントプールCIDR（許可元）"
   type        = string
 }
 
+# サブネットで許可するポート番号（例: RDP=3389, SSH=22等）
 variable "allowed_port" {
-  description = "許可ポート (RDP=3389 / SSH=22 など)"
+  description = "許可ポート（RDP=3389 / SSH=22 等）"
   type        = number
   default     = 3389
 }
