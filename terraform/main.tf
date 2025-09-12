@@ -1,5 +1,5 @@
 #############################################
-# main.tf（命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+# main.tf（修正版 - 命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
 #############################################
 
 terraform {
@@ -24,14 +24,14 @@ provider "azapi" {
 
 provider "azurerm" {
   alias           = "spoke"
-  features        {}  # 必須フィールドを追加
+  features        {}  # 修正: 必須フィールドを追加
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
   alias           = "hub"
-  features        {}  # 必須フィールドを追加
+  features        {}  # 修正: 必須フィールドを追加
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
