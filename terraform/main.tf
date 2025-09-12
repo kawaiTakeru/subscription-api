@@ -1,5 +1,5 @@
 #############################################
-# main.tf（修正版 - 命名規約: <識別子>-<PJ>-<用途>-<環境>-<region_code>-<通番>）
+# main.tf（修正版 - NAT GatewayプレフィックスIPなし）
 #############################################
 
 terraform {
@@ -24,14 +24,14 @@ provider "azapi" {
 
 provider "azurerm" {
   alias           = "spoke"
-  features        {}  # 修正: 必須フィールドを追加
+  features        {}
   subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 provider "azurerm" {
   alias           = "hub"
-  features        {}  # 修正: 必須フィールドを追加
+  features        {}
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
@@ -76,10 +76,9 @@ locals {
   name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # NAT Gateway 命名規則修正
+  # NAT Gateway 命名
   name_natgw = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
   name_natgw_pip = local.project_slug != "" ? "pip-${local.project_slug}-natgw-${var.environment_id}-${var.region_code}-001" : null
-  name_natgw_prefix = local.project_slug != "" ? "ippre-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-001" : null
 
   # ルートテーブル命名
   name_route_table = local.base != "" ? "rt-${local.base}" : null
@@ -356,18 +355,6 @@ resource "azurerm_public_ip" "natgw_pip" {
   ip_version        = "IPv4"
 }
 
-resource "azurerm_public_ip_prefix" "natgw_prefix" {
-  count               = local.is_public ? 1 : 0
-  provider            = azurerm.spoke
-  name                = local.name_natgw_prefix
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  sku                 = "Standard"
-  prefix_length       = 31
-  ip_version          = "IPv4"
-}
-
 resource "azurerm_nat_gateway" "natgw" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
@@ -384,13 +371,6 @@ resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
   nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
   public_ip_address_id  = azurerm_public_ip.natgw_pip[0].id
   depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip.natgw_pip]  # 依存関係を明示
-}
-
-resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
-  count                 = local.is_public ? 1 : 0
-  nat_gateway_id        = azurerm_nat_gateway.natgw[0].id
-  public_ip_prefix_id   = azurerm_public_ip_prefix.natgw_prefix[0].id
-  depends_on            = [azurerm_nat_gateway.natgw, azurerm_public_ip_prefix.natgw_prefix]  # 依存関係を明示
 }
 
 resource "azurerm_subnet_nat_gateway_association" "public_natgw_assoc" {
