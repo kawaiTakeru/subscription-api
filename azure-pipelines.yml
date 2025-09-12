@@ -289,9 +289,38 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "NATGW associations failed" }
             } finally { Pop-Location }
 
-      # Step6a: Peering Hub -> Spoke（private のみ）
+      # Step6: Azure Bastion（public・private 共通）
       - task: AzureCLI@2
-        displayName: Step6a - Peering Hub->Spoke
+        displayName: Step6 - Azure Bastion
+        env:
+          ARM_USE_AZCLI_AUTH: 'true'
+          ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+          TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+          TF_VAR_create_subscription: false
+          TF_VAR_project_name: ${{ parameters.project_name }}
+          TF_VAR_environment_id: ${{ parameters.environment_id }}
+          TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+          TF_INPUT: 'false'
+          TF_IN_AUTOMATION: 'true'
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: pscore
+          scriptLocation: inlineScript
+          inlineScript: |
+            $ErrorActionPreference='Stop'
+            az account set --subscription $env:ARM_SUBSCRIPTION_ID
+            Push-Location "$(Build.SourcesDirectory)/terraform"
+            try {
+              terraform init -no-color -input=false
+              terraform apply -no-color -input=false -auto-approve `
+                -target azurerm_public_ip.bastion_pip `
+                -target azurerm_bastion_host.bastion
+              if ($LASTEXITCODE -ne 0) { throw "Bastion apply failed" }
+            } finally { Pop-Location }
+
+      # Step7a: Peering Hub -> Spoke（private のみ）
+      - task: AzureCLI@2
+        displayName: Step7a - Peering Hub->Spoke
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
@@ -317,9 +346,9 @@ stages:
               if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
             } finally { Pop-Location }
 
-      # Step6b: Peering Spoke->Hub（private のみ）
+      # Step7b: Peering Spoke->Hub（private のみ）
       - task: AzureCLI@2
-        displayName: Step6b - Peering Spoke->Hub
+        displayName: Step7b - Peering Spoke->Hub
         condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
         env:
           ARM_USE_AZCLI_AUTH: 'true'
