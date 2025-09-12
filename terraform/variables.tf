@@ -187,11 +187,3 @@ variable "allowed_port" {
   type        = number
   default     = 3389
 }
-
-# public Bastion NSG: AllowBastionInbound の宛先を CIDR で明示指定するための任意パラメータ
-# 既定は "*"（既存運用と同等）。CIDR を厳格化したい場合に値を設定してください。
-variable "bastion_subnet_cidr_override" {
-  description = "AllowBastionInbound（public）の宛先に使う CIDR。未設定（*）なら任意宛先。"
-  type        = string
-  default     = "*"
-}
