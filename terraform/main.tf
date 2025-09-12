@@ -1,5 +1,5 @@
 #############################################
-# main.tf（Azure Bastion用NSGのprivate側ルールを追加／public側のCIDR参照の属性修正）
+# main.tf（Bastion NSG: private 必須ルール追加 + 型不一致修正）
 #############################################
 
 terraform {
@@ -94,12 +94,9 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # 画像1/2に基づく Bastion 用 NSG ルール
-  # 注意: Azure の既定ルール(65000/65001/65500)は自動付与のため定義不要
-
-  # public: 非閉域網（パブリックサブネット）
-  # AllowBastionInbound 宛先CIDRは AzureBastionSubnet を参照（address_prefixes のみ使用）
-  bastion_public_rules = [
+  # Bastion NSG ルール（生データ）
+  # 注意: public 側の AllowBastionInbound は AzureBastionSubnet の CIDR を参照
+  bastion_public_rules_raw = [
     {
       name       = "AllowBastionInbound"
       prio       = 100
@@ -141,7 +138,7 @@ locals {
       dst    = "VirtualNetwork"
       dports = ["8080","5701"]
     },
-    # Outbound（画像1）
+    # Outbound
     {
       name   = "AllowSshRdpOutbound"
       prio   = 100
@@ -184,8 +181,8 @@ locals {
     }
   ]
 
-  # private: 閉域網（AzureBastionSubnet）必須ルールを追加
-  bastion_private_rules = [
+  # private 側（Azure 必須ルールを追加）
+  bastion_private_rules_raw = [
     {
       name   = "AllowHttpsInbound"
       prio   = 100
@@ -218,10 +215,15 @@ locals {
     }
   ]
 
-  # 実際に適用する Bastion ルール
+  # ここで各要素に dst_prefix キーを必ず付与（null 埋め）して、要素型を揃える
+  # また for 式の結果は list になるため、条件式の左右が list(object(...)) で一致し、型エラーを回避
+  bastion_public_rules  = [for r in local.bastion_public_rules_raw  : merge({ dst_prefix = null }, r)]
+  bastion_private_rules = [for r in local.bastion_private_rules_raw : merge({ dst_prefix = null }, r)]
+
+  # 実際に適用する Bastion ルール（public/private 共に list(object(...))）
   bastion_nsg_rules = local.is_public ? local.bastion_public_rules : local.bastion_private_rules
 
-  # 通常 Subnet 用 NSG
+  # 通常 Subnet 用 NSG（こちらは以前どおり）
   normal_nsg_rules = concat(
     [
       {
@@ -357,14 +359,14 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   dynamic "security_rule" {
     for_each = { for r in local.bastion_nsg_rules : r.name => r }
     content {
-      name                    = security_rule.value.name
-      priority                = security_rule.value.prio
-      direction               = security_rule.value.dir
-      access                  = security_rule.value.acc
-      protocol                = security_rule.value.proto
-      source_port_range       = "*"
-      destination_port_ranges = security_rule.value.dports
-      source_address_prefix   = security_rule.value.src
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.prio
+      direction                  = security_rule.value.dir
+      access                     = security_rule.value.acc
+      protocol                   = security_rule.value.proto
+      source_port_range          = "*"
+      destination_port_ranges    = security_rule.value.dports
+      source_address_prefix      = security_rule.value.src
       destination_address_prefix = try(security_rule.value.dst_prefix, security_rule.value.dst)
     }
   }
