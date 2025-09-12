@@ -73,8 +73,8 @@ locals {
   name_bastion_nsg = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # Bastion 命名（新規）
-  name_bastion_host     = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_host     = local.project_slug != "" ? "bas-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_bastion_public_ip = local.project_slug != "" ? "pip-${local.project_slug}-bas-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
   # ルートテーブル命名
   name_route_table = local.base != "" ? "rt-${local.base}" : null
