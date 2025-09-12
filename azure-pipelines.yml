@@ -101,9 +101,8 @@ stages:
             Push-Location "$(Build.SourcesDirectory)/terraform"
             try {
               terraform init -no-color -input=false
-              terraform apply -no-color -input=false -auto-approve `
-                -target=azurerm_role_management_policy.owner_role_rules `
-                -target=azurerm_role_management_policy.contributor_role_rules
+              # ↓ここは絶対に一行で書いてください（途中で改行やバックスラッシュ・バッククォートを入れない）
+              terraform apply -no-color -input=false -auto-approve -target=azurerm_role_management_policy.owner_role_rules -target=azurerm_role_management_policy.contributor_role_rules
               if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
             } finally { Pop-Location }
 
