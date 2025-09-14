@@ -102,14 +102,158 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 443受信元
-  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
+  # ========== Bastion用NSGルール定義: private と public で完全分岐 ==========
+  bastion_nsg_rules = local.is_private ? [
+    // ---- Inbound ----
+    {
+      name   = "AllowInbound"
+      prio   = 100
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "219.54.131.37"
+      # ※宛先の対象にIP Addressesを指定し、九段会館のIPレンジを指定
+      dst    = ["xxx.xxx.xxx.xxx/yy"] # ←九段会館のIPレンジに変更してください
+      dports = ["443"]
+    },
+    {
+      name   = "AllowGatewayManager"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "GatewayManager"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowAzureLoadBalancer"
+      prio   = 120
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionHostCommunications"
+      prio   = 130
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080", "5701"]
+    },
+    {
+      name   = "AllowVnetInBound"
+      prio   = 65000
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["*"]
+    },
+    {
+      name   = "AllowAzureLoadBalancerInBound"
+      prio   = 65001
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["*"]
+    },
+    {
+      name   = "DenyAllInBound"
+      prio   = 65500
+      dir    = "Inbound"
+      acc    = "Deny"
+      proto  = "*"
+      src    = "*"
+      dst    = "*"
+      dports = ["*"]
+    },
 
-  # Bastion用NSGルール定義
-  bastion_nsg_rules = [
+    // ---- Outbound ----
+    {
+      name   = "AllowSshRdpOutbound"
+      prio   = 100
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "VirtualNetwork"
+      dports = ["22", "3389"]
+    },
+    {
+      name   = "AllowAzureCloudOutbound"
+      prio   = 110
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "*"
+      dst    = "AzureCloud"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionCommunication"
+      prio   = 120
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080", "5701"]
+    },
+    {
+      name   = "AllowVnetOutBound"
+      prio   = 65000
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["*"]
+    },
+    {
+      name   = "AllowInternetOutBound"
+      prio   = 65001
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
+      dports = ["*"]
+    },
+    {
+      name   = "DenyAllOutBound"
+      prio   = 65500
+      dir    = "Outbound"
+      acc    = "Deny"
+      proto  = "*"
+      src    = "*"
+      dst    = "*"
+      dports = ["*"]
+    }
+  ] : [
+    // ========== Public用 ==========
+    // ---- Inbound ----
+    {
+      name   = "AllowHttpsInbound"
+      prio   = 100
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "Internet"
+      dst    = "*"
+      dports = ["443"]
+    },
     {
       name   = "AllowGatewayManagerInbound"
-      prio   = 100
+      prio   = 110
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
@@ -119,7 +263,7 @@ locals {
     },
     {
       name   = "AllowAzureLoadBalancerInbound"
-      prio   = 105
+      prio   = 120
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
@@ -128,28 +272,60 @@ locals {
       dports = ["443"]
     },
     {
-      name   = "AllowHttpsInbound"
-      prio   = 110
+      name   = "AllowBastionHostCommunication"
+      prio   = 130
       dir    = "Inbound"
       acc    = "Allow"
-      proto  = "Tcp"
-      src    = local.bastion_https_source
-      dst    = "*"
-      dports = ["443"]
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080", "5701"]
     },
     {
+      name   = "AllowVnetInBound"
+      prio   = 65000
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["*"]
+    },
+    {
+      name   = "AllowAzureLoadBalancerInBound"
+      prio   = 65001
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["*"]
+    },
+    {
+      name   = "DenyAllInBound"
+      prio   = 65500
+      dir    = "Inbound"
+      acc    = "Deny"
+      proto  = "*"
+      src    = "*"
+      dst    = "*"
+      dports = ["*"]
+    },
+
+    // ---- Outbound ----
+    {
       name   = "AllowSshRdpOutbound"
-      prio   = 200
+      prio   = 100
       dir    = "Outbound"
       acc    = "Allow"
       proto  = "*"
       src    = "*"
       dst    = "VirtualNetwork"
-      dports = ["22","3389"]
+      dports = ["22", "3389"]
     },
     {
       name   = "AllowAzureCloudOutbound"
-      prio   = 210
+      prio   = 110
       dir    = "Outbound"
       acc    = "Allow"
       proto  = "Tcp"
@@ -158,24 +334,54 @@ locals {
       dports = ["443"]
     },
     {
-      name   = "AllowBastionCommunicationOutbound"
-      prio   = 220
+      name   = "AllowBastionCommunication"
+      prio   = 120
       dir    = "Outbound"
       acc    = "Allow"
       proto  = "*"
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
-      dports = ["8080","5701"]
+      dports = ["8080", "5701"]
     },
     {
       name   = "AllowHttpOutbound"
-      prio   = 230
+      prio   = 130
       dir    = "Outbound"
       acc    = "Allow"
       proto  = "*"
       src    = "*"
       dst    = "Internet"
       dports = ["80"]
+    },
+    {
+      name   = "AllowVnetOutBound"
+      prio   = 65000
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["*"]
+    },
+    {
+      name   = "AllowInternetOutBound"
+      prio   = 65001
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
+      dports = ["*"]
+    },
+    {
+      name   = "DenyAllOutBound"
+      prio   = 65500
+      dir    = "Outbound"
+      acc    = "Deny"
+      proto  = "*"
+      src    = "*"
+      dst    = "*"
+      dports = ["*"]
     }
   ]
 }
@@ -257,8 +463,17 @@ resource "azurerm_network_security_group" "bastion_nsg" {
       protocol                   = security_rule.value.proto
       source_port_range          = "*"
       destination_port_ranges    = security_rule.value.dports
+
+      # AllowInboundのみ "destination_address_prefixes" でIPレンジ指定
       source_address_prefix      = security_rule.value.src
-      destination_address_prefix = security_rule.value.dst
+      destination_address_prefix = (
+        security_rule.value.name == "AllowInbound" && local.is_private
+        ? null : lookup(security_rule.value, "dst", "*")
+      )
+      destination_address_prefixes = (
+        security_rule.value.name == "AllowInbound" && local.is_private
+        ? security_rule.value.dst : null
+      )
     }
   }
 }
