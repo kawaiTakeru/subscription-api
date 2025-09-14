@@ -25,7 +25,7 @@ provider "azapi" {
 provider "azurerm" {
   features {}
   alias           = "spoke"
-  subscription_id = var.spoke_subscription_id != "" ? var.spoke_subscription_id : null
+  subscription_id = local.effective_spoke_subscription_id
   tenant_id       = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
@@ -37,8 +37,9 @@ provider "azurerm" {
 }
 
 locals {
-  need_create_subscription        = false
-  effective_spoke_subscription_id = var.spoke_subscription_id
+  # サブスクリプション新規作成有無
+  need_create_subscription        = var.create_subscription
+  effective_spoke_subscription_id = var.create_subscription ? (length(azurerm_subscription.spoke) > 0 ? azurerm_subscription.spoke[0].subscription_id : null) : var.spoke_subscription_id
 
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
@@ -337,6 +338,22 @@ locals {
       destination_address_prefix = "VirtualNetwork"
     }
   ]
+}
+
+# -----------------------------------------------------------
+# サブスクリプション新規作成（MCAでのみ有効）
+# -----------------------------------------------------------
+resource "azurerm_subscription" "spoke" {
+  count = var.create_subscription ? 1 : 0
+  billing_scope_id  = (
+    var.billing_account_name != "" &&
+    var.billing_profile_name != "" &&
+    var.invoice_section_name != ""
+  ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
+
+  subscription_name = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
+  workload                = var.subscription_workload
+  management_group_id     = var.management_group_id != "" ? var.management_group_id : null
 }
 
 # -----------------------------------------------------------
@@ -647,6 +664,7 @@ output "base_naming"               { value = local.base }
 output "rg_expected_name"          { value = local.name_rg }
 output "vnet_expected_name"        { value = local.name_vnet }
 output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "created_subscription_id"   { value = var.create_subscription ? (length(azurerm_subscription.spoke) > 0 ? azurerm_subscription.spoke[0].subscription_id : null) : var.spoke_subscription_id }
 output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
