@@ -151,31 +151,28 @@ stages:
                   try {
                     terraform init -no-color -input=false
 
-                    # 1) alias のみ作成
+                    # 1) alias リソースのみ作成（azurerm に触れない）
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
-                    # 2) state を最新化（data 反映のため）
-                    terraform apply -no-color -input=false -auto-approve -refresh-only
-                    if ($LASTEXITCODE -ne 0) { throw "refresh-only failed" }
+                    # 2) data を単体ターゲットで読み出し（refresh-only を使わない）
+                    terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
+                    if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
-                    # 3) 生成 ID を取得（まず output、ダメなら REST にフォールバック）
+                    # 3) 生成 ID を取得（output → REST フォールバック）
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
 
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
-                      # a) terraform output
                       try {
                         $raw = terraform output -raw created_subscription_id 2>$null
                         if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
 
-                      # b) state の alias id → REST
                       if (-not $createdSubId) {
                         $createdSubId = Try-GetSubIdViaAliasIdFromState
                       }
 
-                      # c) alias 名 → REST
                       if (-not $createdSubId -and $aliasName) {
                         $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName
                       }
@@ -188,7 +185,7 @@ stages:
 
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 4) Azure CLI が新サブスクを認識するまで軽く待機
+                    # 4) Azure CLI が新規サブスクを認識するまで待機（'not known by Azure CLI' 回避）
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -211,6 +208,7 @@ stages:
 
                 # Hub側のサブスクリプションIDも出力
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
+
 
           # Step1: リソースグループ作成
           - task: AzureCLI@2
