@@ -102,9 +102,9 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # 画像に従い、カスタム追加が必要なルールのみ定義する
+  # カスタム追加が必要なルールのみ定義する
 
-  # Public Subnet NSGルール（画像1）: AllowBastionInbound, AllowGatawayManagerInbound, AllowAzureLoadBalancerInbound, AllowBastionHostCommunication
+  # Public Subnet NSGルール: AllowBastionInbound, AllowGatawayManagerInbound, AllowAzureLoadBalancerInbound, AllowBastionHostCommunication
   public_subnet_nsg_rules = [
     {
       name    = "AllowBastionInbound"
@@ -149,7 +149,7 @@ locals {
     }
   ]
 
-  # Public Bastion Subnet NSGルール（画像2）
+  # Public Bastion Subnet NSGルール
   public_bastion_nsg_rules = [
     {
       name    = "AllowHttpsInbound"
@@ -204,7 +204,7 @@ locals {
     }
   ]
 
-  # Private Subnet NSGルール（画像3）
+  # Private Subnet NSGルール
   private_subnet_nsg_rules = [
     {
       name    = "AllowBastionInbound"
@@ -220,7 +220,7 @@ locals {
     }
   ]
 
-  # Private Bastion Subnet NSGルール（画像4）
+  # Private Bastion Subnet NSGルール
   private_bastion_nsg_rules = [
     {
       name    = "AllowHttpsInbound"
