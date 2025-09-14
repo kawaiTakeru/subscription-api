@@ -105,21 +105,16 @@ locals {
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # -----------------------------------------------------------
-  # 必ずsubnet_nsg_rulesを宣言してください（空でもOK）
-  # -----------------------------------------------------------
-  subnet_nsg_rules = []
-
-  # private bastion NSGルール例（必要に応じて他のルールもここに）
-  private_bastion_nsg_rules = [
+  # Bastion用NSGルール
+  bastion_nsg_rules = [
     {
       name   = "AllowInbound"
       prio   = 100
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
-      src    = ["219.54.131.37"]
-      dst    = ["*"]
+      src    = "219.54.131.37"
+      dst    = "*"
       dports = ["443"]
     },
     {
@@ -128,8 +123,8 @@ locals {
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
-      src    = ["GatewayManager"]
-      dst    = ["*"]
+      src    = "GatewayManager"
+      dst    = "*"
       dports = ["443"]
     },
     {
@@ -138,8 +133,8 @@ locals {
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
-      src    = ["AzureLoadBalancer"]
-      dst    = ["*"]
+      src    = "AzureLoadBalancer"
+      dst    = "*"
       dports = ["443"]
     },
     {
@@ -148,63 +143,9 @@ locals {
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "*"
-      src    = ["VirtualNetwork"]
-      dst    = ["VirtualNetwork"]
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
       dports = ["8080", "5701"]
-    }
-  ]
-
-  # Bastion NSGルール切り替え（例）
-  bastion_nsg_rules = local.is_private ? local.private_bastion_nsg_rules : [
-    {
-      name    = "AllowHttpsInbound"
-      prio    = 100
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["Internet"]
-      dst     = ["*"]
-      dports  = ["443"]
-    },
-    {
-      name    = "AllowSshRdpOutbound"
-      prio    = 100
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["*"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["22", "3389"]
-    },
-    {
-      name    = "AllowAzureCloudOutbound"
-      prio    = 110
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["*"]
-      dst     = ["AzureCloud"]
-      dports  = ["443"]
-    },
-    {
-      name    = "AllowBastionCommunicatiou"
-      prio    = 120
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["VirtualNetwork"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["8080", "5701"]
-    },
-    {
-      name    = "AllowHttpOutbound"
-      prio    = 130
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["*"]
-      dst     = ["Internet"]
-      dports  = ["80"]
     }
   ]
 }
@@ -242,23 +183,28 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  dynamic "security_rule" {
-    for_each = { for r in local.subnet_nsg_rules : "${r.dir}-${r.prio}-${r.name}" => r }
-    content {
-      name                       = security_rule.value.name
-      priority                   = security_rule.value.prio
-      direction                  = security_rule.value.dir
-      access                     = security_rule.value.acc
-      protocol                   = security_rule.value.proto
-      source_port_range          = "*"
-      destination_port_ranges    = security_rule.value.dports
+  security_rule {
+    name                       = local.name_sr_allow
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = var.allowed_port
+    source_address_prefix      = var.vpn_client_pool_cidr
+    destination_address_prefix = "*"
+  }
 
-      # 1要素のみprefix、2要素以上はprefixesで渡す
-      source_address_prefix      = length(security_rule.value.src) == 1 ? security_rule.value.src[0] : null
-      source_address_prefixes    = length(security_rule.value.src) > 1 ? security_rule.value.src : null
-      destination_address_prefix = length(security_rule.value.dst) == 1 ? security_rule.value.dst[0] : null
-      destination_address_prefixes = length(security_rule.value.dst) > 1 ? security_rule.value.dst : null
-    }
+  security_rule {
+    name                       = local.name_sr_deny_internet_in
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
   }
 }
 
