@@ -113,7 +113,7 @@ locals {
       proto  = "Tcp"
       src    = "219.54.131.37"
       # ※宛先の対象にIP Addressesを指定し、九段会館のIPレンジを指定
-      dst    = ["xxx.xxx.xxx.xxx/yy"] # ←九段会館のIPレンジに変更してください
+      dst    = ["219.54.131.37"] # ←九段会館のIPレンジに変更してください
       dports = ["443"]
     },
     {
