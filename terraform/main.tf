@@ -39,7 +39,7 @@ locals {
   # 新規作成時はazapi経由で取得、既存流用時はそのまま
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id,
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
+    try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, "")
   )
 
   project_raw = trimspace(var.project_name)
@@ -210,7 +210,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -221,7 +221,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -308,7 +308,7 @@ locals {
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -319,7 +319,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -330,7 +330,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -671,12 +671,12 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# ★ ここだけ修正（他は既存のまま）
-#   - 作成時は alias リソースの応答から取得
-#   - 既存利用時は var.spoke_subscription_id をそのまま返す
+# ★ jsondecode を適用して GUID だけを返す
 output "created_subscription_id" {
-  description = "Spoke subscription id (newly created or reused)."
-  value       = var.create_subscription ? try(azapi_resource.subscription[0].output.properties.subscriptionId, null) : var.spoke_subscription_id
+  value = coalesce(
+    try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, null),
+    try(jsondecode(azapi_resource.subscription[0].output).properties.subscriptionId, null)
+  )
 }
 
 # -----------------------------------------------------------
