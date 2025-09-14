@@ -181,9 +181,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
                 } finally { Pop-Location }
 
-          # Step3: サブネット＋NSG関連リソース
+          # Step3a: サブネット作成
           - task: AzureCLI@2
-            displayName: Step3 - Subnet + NSG
+            displayName: Step3a - Subnet
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -206,12 +206,66 @@ stages:
                   terraform init -no-color -input=false
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_subnet.bastion_subnet `
-                    -target azurerm_subnet.subnet `
+                    -target azurerm_subnet.subnet
+                  if ($LASTEXITCODE -ne 0) { throw "Subnet apply failed" }
+                } finally { Pop-Location }
+
+          # Step3b: NSG作成
+          - task: AzureCLI@2
+            displayName: Step3b - NSG
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+                Push-Location "$(Build.SourcesDirectory)/terraform"
+                try {
+                  terraform init -no-color -input=false
+                  terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_network_security_group.subnet_nsg `
+                    -target azurerm_network_security_group.bastion_nsg
+                  if ($LASTEXITCODE -ne 0) { throw "NSG apply failed" }
+                } finally { Pop-Location }
+
+          # Step3c: NSGアタッチ
+          - task: AzureCLI@2
+            displayName: Step3c - NSGアタッチ
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+                Push-Location "$(Build.SourcesDirectory)/terraform"
+                try {
+                  terraform init -no-color -input=false
+                  terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_subnet_network_security_group_association.subnet_assoc `
-                    -target azurerm_network_security_group.bastion_nsg `
                     -target azurerm_subnet_network_security_group_association.bastion_assoc
-                  if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
+                  if ($LASTEXITCODE -ne 0) { throw "NSG attach apply failed" }
                 } finally { Pop-Location }
 
           # Step4: プライベート環境のみルートテーブル関連リソース
@@ -368,4 +422,5 @@ stages:
                 try {
                   terraform init -no-color -input=false
                   terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network_peering.spoke_to_hub
-                  if ($LASTEXITCODE -ne 0) { throw "Pe
+                  if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
+                } finally { Pop-Location }
