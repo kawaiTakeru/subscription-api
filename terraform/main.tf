@@ -37,9 +37,14 @@ provider "azurerm" {
 }
 
 locals {
-  # サブスクリプション新規作成有無
-  need_create_subscription        = var.create_subscription
-  effective_spoke_subscription_id = var.create_subscription ? (length(azurerm_subscription.spoke) > 0 ? azurerm_subscription.spoke[0].subscription_id : null) : var.spoke_subscription_id
+  # サブスクリプション新規作成判定（spoke_subscription_id未指定かつcreate_subscription=true）
+  need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
+
+  # 新規作成時はazapi経由で取得、既存流用時はそのまま
+  effective_spoke_subscription_id = coalesce(
+    var.spoke_subscription_id,
+    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, "")
+  )
 
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
@@ -341,14 +346,37 @@ locals {
 }
 
 # -----------------------------------------------------------
-# サブスクリプション新規作成（MCAでのみ有効）
+# サブスクリプション新規作成（azapi + alias方式）
 # -----------------------------------------------------------
-resource "azurerm_subscription" "spoke" {
-  count = var.create_subscription ? 1 : 0
-  billing_scope_id     = local.billing_scope
-  subscription_name    = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
-  workload             = var.subscription_workload
-  management_group_id  = var.management_group_id != "" ? var.management_group_id : null
+resource "azapi_resource" "subscription" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : "alias-${local.base}"
+  parent_id = "/"
+  body = jsonencode({
+    properties = {
+      displayName  = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
+      billingScope = local.billing_scope
+      workload     = var.subscription_workload
+      additionalProperties = {
+        managementGroupId = var.management_group_id != "" ? var.management_group_id : "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+      }
+    }
+  })
+  timeouts {
+    create = "30m"
+    read   = "5m"
+    delete = "30m"
+  }
+}
+
+data "azapi_resource" "subscription_get" {
+  count     = local.need_create_subscription ? 1 : 0
+  type      = "Microsoft.Subscription/aliases@2021-10-01"
+  name      = var.subscription_alias_name != "" ? var.subscription_alias_name : "alias-${local.base}"
+  parent_id = "/"
+  response_export_values = ["properties.subscriptionId"]
+  depends_on = [azapi_resource.subscription]
 }
 
 # -----------------------------------------------------------
@@ -659,7 +687,6 @@ output "base_naming"               { value = local.base }
 output "rg_expected_name"          { value = local.name_rg }
 output "vnet_expected_name"        { value = local.name_vnet }
 output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "created_subscription_id"   { value = var.create_subscription ? (length(azurerm_subscription.spoke) > 0 ? azurerm_subscription.spoke[0].subscription_id : null) : var.spoke_subscription_id }
 output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
