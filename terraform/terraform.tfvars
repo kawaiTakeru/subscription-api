@@ -23,11 +23,11 @@ region = "japaneast"
 # Subscription情報（Step0: 既存または新規作成制御）
 # ===========================================================
 # 新規作成する場合のみ true、既存流用なら false
-create_subscription   = true
-# create_subscription   = false
+#create_subscription   = true
+ create_subscription   = false
 
 # SpokeサブスクリプションID（既存利用時に指定）
-# spoke_subscription_id = "da4629b7-d9f1-47ab-8310-f9793c73253a"
+spoke_subscription_id = "da4629b7-d9f1-47ab-8310-f9793c73253a"
 
 # Workload種別
 subscription_workload = "Production"
