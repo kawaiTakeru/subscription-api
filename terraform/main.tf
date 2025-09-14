@@ -37,11 +37,9 @@ provider "azurerm" {
 }
 
 locals {
-  # サブスクリプション作成はパイプラインから既存を必ず渡すため常にfalse
   need_create_subscription        = false
   effective_spoke_subscription_id = var.spoke_subscription_id
 
-  # プロジェクト・用途名のスラグ化
   project_raw = trimspace(var.project_name)
   purpose_raw = trimspace(var.purpose_name)
 
@@ -53,15 +51,17 @@ locals {
     local.purpose_raw == "検証" ? "kensho" : local.purpose_slug_base
   )
 
-  # 命名規約生成用部品
   base_parts = compact([local.project_slug, local.purpose_slug, var.environment_id, var.region_code, var.sequence])
   base       = join("-", local.base_parts)
 
-  # リソース命名
   name_rg                  = local.base != "" ? "rg-${local.base}" : null
   name_vnet                = local.base != "" ? "vnet-${local.base}" : null
   name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
+  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
+  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
   name_bastion_nsg         = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_host        = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip   = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
@@ -72,12 +72,28 @@ locals {
   name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
-  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
-  # パブリック・プライベートVNet判定
+  billing_scope = (
+    var.billing_account_name != "" &&
+    var.billing_profile_name != "" &&
+    var.invoice_section_name != ""
+  ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
+
+  sub_properties_base = {
+    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
+    workload     = var.subscription_workload
+    billingScope = local.billing_scope
+  }
+  sub_properties_extra = var.management_group_id != "" ? {
+    additionalProperties = { managementGroupId = var.management_group_id }
+  } : {}
+  sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
+
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
+
+  # Bastion 443受信元
+  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
   # --- Public Subnet NSGルール ---
   public_subnet_nsg_rules = [
