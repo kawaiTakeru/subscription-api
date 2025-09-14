@@ -91,10 +91,18 @@ stages:
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
-                    terraform apply -no-color -input=false -auto-approve -target=azapi_resource.subscription[0]
+                    # ★ クォートを付けて引数破損を防止
+                    terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
-                    $output = terraform output -json created_subscription_id
-                    $createdSubId = $output | ConvertFrom-Json
+
+                    # 作成直後でも取得できるように、出力をシンプルに取得
+                    $createdSubId = terraform output -raw created_subscription_id
+                    if (-not $createdSubId) {
+                      # 念のためのフォールバック（-json でもOK）
+                      $j = terraform output -json created_subscription_id | ConvertFrom-Json
+                      $createdSubId = "$j"
+                    }
+                    if (-not $createdSubId) { throw "created_subscription_id not found in outputs." }
                     Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$createdSubId"
                   } finally { Pop-Location }
                 } elseif ($createSub -eq "false") {
@@ -105,6 +113,7 @@ stages:
                 }
 
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
+
           # Step1: リソースグループ作成
           - task: AzureCLI@2
             displayName: Step1 - Resource Group
@@ -357,7 +366,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "PIP attach failed" }
                   terraform apply -no-color -input=false -auto-approve -target azurerm_nat_gateway_public_ip_prefix_association.natgw_prefix_assoc
                   if ($LASTEXITCODE -ne 0) { throw "Prefix attach failed" }
-                  terraform apply -no-color -input=false -auto-approve -target azurerm_subnet_nat_gateway_association.public_natgw_assoc
+                  terraform apply -no-color -input=false -auto-approve -target azurerm_subnet_nat_gateway_association.subnet_natgw_assoc
                   if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
                 } finally { Pop-Location }
 
