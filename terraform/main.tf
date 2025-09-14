@@ -102,55 +102,65 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # カスタム追加が必要なルールのみ定義する
+  # Bastion 443受信元
+  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # Public Subnet NSGルール: AllowBastionInbound, AllowGatawayManagerInbound, AllowAzureLoadBalancerInbound, AllowBastionHostCommunication
-  public_subnet_nsg_rules = [
+  # -----------------------------------------------------------
+  # カスタムNSGルールのみ定義（デフォルトルールはAzureで自動付与されるため定義不要）
+  # -----------------------------------------------------------
+
+  # ---- private Bastion NSG（画像指定通り） ----
+  private_bastion_nsg_rules = [
     {
-      name    = "AllowBastionInbound"
-      prio    = 100
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["*"]
-      # AzureBastionSubnetのCIDRを指定する
-      dst     = [var.bastion_subnet_cidr] # AzureBastionSubnetのCIDR
-      dports  = ["3389", "22"]
+      name   = "AllowInbound"
+      prio   = 100
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = ["219.54.131.37"]
+      dst    = ["*"]
+      dports = ["443"]
     },
     {
-      name    = "AllowGatawayManagerInbound"
-      prio    = 110
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["GatewayManager"]
-      dst     = ["*"]
-      dports  = ["443"]
+      name   = "AllowGatewayManager"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = ["GatewayManager"]
+      dst    = ["*"]
+      dports = ["443"]
     },
     {
-      name    = "AllowAzureLoadBalancerInbound"
-      prio    = 120
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["AzureLoadBalancer"]
-      dst     = ["*"]
-      dports  = ["443"]
+      name   = "AllowAzureLoadBalancer"
+      prio   = 120
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = ["AzureLoadBalancer"]
+      dst    = ["*"]
+      dports = ["443"]
     },
     {
-      name    = "AllowBastionHostCommunication"
-      prio    = 130
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["VirtualNetwork"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["8080", "5701"]
+      name   = "AllowBastionHostCommunications"
+      prio   = 130
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = ["VirtualNetwork"]
+      dst    = ["VirtualNetwork"]
+      dports = ["8080", "5701"]
     }
   ]
 
-  # Public Bastion Subnet NSGルール
-  public_bastion_nsg_rules = [
+  # ---- 他のNSGルール分岐 ----
+  # public/private, bastion/通常で分岐（ここでは例として従来のまま）
+
+  # 通常サブネットNSG（public/private用：既存のロジック/指定があればここで上書き）
+
+  # Bastion NSGルール切り替え
+  bastion_nsg_rules = local.is_private ? local.private_bastion_nsg_rules : [
+    # public bastion NSGルール（従来どおり、必要に応じて修正）
     {
       name    = "AllowHttpsInbound"
       prio    = 100
@@ -161,7 +171,6 @@ locals {
       dst     = ["*"]
       dports  = ["443"]
     },
-    # Outbound（送信側）
     {
       name    = "AllowSshRdpOutbound"
       prio    = 100
@@ -204,41 +213,6 @@ locals {
     }
   ]
 
-  # Private Subnet NSGルール
-  private_subnet_nsg_rules = [
-    {
-      name    = "AllowBastionInbound"
-      prio    = 100
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      # 九段会館のIPレンジを指定する
-      src     = [var.kudan_kaikan_ip_range] # 九段会館のIPレンジ
-      # AzureBastionSubnetのCIDRを指定する
-      dst     = [var.bastion_subnet_cidr]   # AzureBastionSubnetのCIDR
-      dports  = ["3389", "22"]
-    }
-  ]
-
-  # Private Bastion Subnet NSGルール
-  private_bastion_nsg_rules = [
-    {
-      name    = "AllowHttpsInbound"
-      prio    = 100
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      # 九段会館のIPレンジを指定する
-      src     = [var.kudan_kaikan_ip_range] # 九段会館のIPレンジ
-      dst     = ["*"]
-      dports  = ["443"]
-    }
-  ]
-
-  # 動的にNSGルールを切り替え
-  subnet_nsg_rules = local.is_public ? local.public_subnet_nsg_rules : local.private_subnet_nsg_rules
-  bastion_nsg_rules = local.is_public ? local.public_bastion_nsg_rules : local.private_bastion_nsg_rules
-}
 
 # -----------------------------------------------------------
 # Resource Group
