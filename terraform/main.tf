@@ -233,7 +233,7 @@ locals {
     {
       name                       = "AllowHttpOutbound"
       priority                   = 130
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -297,7 +297,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -331,7 +331,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
