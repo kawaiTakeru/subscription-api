@@ -105,21 +105,17 @@ locals {
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # Bastion用NSGルール
+  # -----------------------------------------------------------
+  # NSGルール定義（0912を参考に要件修正版）
+  # -----------------------------------------------------------
+  # subnet_nsgは0912のまま
+  subnet_nsg_rules = []
+
+  # Azure Bastion Subnet用必須NSGルール（0912ベース＋要件で上書き）
   bastion_nsg_rules = [
     {
-      name   = "AllowInbound"
+      name   = "AllowGatewayManagerInbound"
       prio   = 100
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "219.54.131.37"
-      dst    = "*"
-      dports = ["443"]
-    },
-    {
-      name   = "AllowGatewayManager"
-      prio   = 110
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
@@ -128,8 +124,8 @@ locals {
       dports = ["443"]
     },
     {
-      name   = "AllowAzureLoadBalancer"
-      prio   = 120
+      name   = "AllowAzureLoadBalancerInbound"
+      prio   = 105
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
@@ -138,14 +134,54 @@ locals {
       dports = ["443"]
     },
     {
-      name   = "AllowBastionHostCommunications"
-      prio   = 130
+      name   = "AllowHttpsInbound"
+      prio   = 110
       dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = local.bastion_https_source
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowSshRdpOutbound"
+      prio   = 200
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "VirtualNetwork"
+      dports = ["22","3389"]
+    },
+    {
+      name   = "AllowAzureCloudOutbound"
+      prio   = 210
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "*"
+      dst    = "AzureCloud"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionCommunicationOutbound"
+      prio   = 220
+      dir    = "Outbound"
       acc    = "Allow"
       proto  = "*"
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
-      dports = ["8080", "5701"]
+      dports = ["8080","5701"]
+    },
+    {
+      name   = "AllowHttpOutbound"
+      prio   = 230
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
+      dports = ["80"]
     }
   ]
 }
@@ -182,30 +218,6 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   name                = local.name_nsg
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-
-  security_rule {
-    name                       = local.name_sr_allow
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = var.allowed_port
-    source_address_prefix      = var.vpn_client_pool_cidr
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = local.name_sr_deny_internet_in
-    priority                   = 200
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "Internet"
-    destination_address_prefix = "*"
-  }
 }
 
 # -----------------------------------------------------------
