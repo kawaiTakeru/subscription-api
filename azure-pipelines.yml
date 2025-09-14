@@ -105,7 +105,6 @@ stages:
                 }
 
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
-
           # Step1: リソースグループ作成
           - task: AzureCLI@2
             displayName: Step1 - Resource Group
