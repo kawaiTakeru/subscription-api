@@ -205,11 +205,11 @@ stages:
                 try {
                   terraform init -no-color -input=false
                   terraform apply -no-color -input=false -auto-approve `
-                    -target azurerm_network_security_group.subnet_nsg `
+                    -target azurerm_subnet.bastion_subnet `
                     -target azurerm_subnet.subnet `
+                    -target azurerm_network_security_group.subnet_nsg `
                     -target azurerm_subnet_network_security_group_association.subnet_assoc `
                     -target azurerm_network_security_group.bastion_nsg `
-                    -target azurerm_subnet.bastion_subnet `
                     -target azurerm_subnet_network_security_group_association.bastion_assoc
                   if ($LASTEXITCODE -ne 0) { throw "Subnet/NSG apply failed" }
                 } finally { Pop-Location }
