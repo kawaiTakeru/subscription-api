@@ -1,7 +1,3 @@
-# ===========================================================
-# main.tf 
-# ===========================================================
-
 terraform {
   required_version = ">= 1.5.0"
 
@@ -289,7 +285,7 @@ locals {
     {
       name                       = "AllowAzureLoadBalancer"
       priority                   = 120
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -300,7 +296,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -675,14 +671,12 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-
-
-# ★ ここを修正：alias作成直後（target apply直後）でもIDを確実に返す
+# ★ ここだけ修正（他は既存のまま）
+#   - 作成時は alias リソースの応答から取得
+#   - 既存利用時は var.spoke_subscription_id をそのまま返す
 output "created_subscription_id" {
-  value = coalesce(
-    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, null),
-    try(azapi_resource.subscription[0].output.properties.subscriptionId, null)
-  )
+  description = "Spoke subscription id (newly created or reused)."
+  value       = var.create_subscription ? try(azapi_resource.subscription[0].output.properties.subscriptionId, null) : var.spoke_subscription_id
 }
 
 # -----------------------------------------------------------
@@ -697,7 +691,6 @@ output "base_naming"               { value = local.base }
 output "rg_expected_name"          { value = local.name_rg }
 output "vnet_expected_name"        { value = local.name_vnet }
 output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-
 output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
