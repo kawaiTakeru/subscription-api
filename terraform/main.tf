@@ -106,10 +106,10 @@ locals {
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
   # -----------------------------------------------------------
-  # Subnet用NSGルール定義（public/private両方でsrc,dstを必ず配列型にする）
+  # カスタムNSGルールのみ定義（デフォルトルールはAzureで自動付与されるため定義不要）
   # -----------------------------------------------------------
   subnet_nsg_rules = [
-    // Inbound rules
+    // 例: Bastion用受信ルールのみ。ほかに必要なカスタムルールがあれば追加
     {
       name    = "AllowBastionInbound"
       prio    = 100
@@ -120,107 +120,8 @@ locals {
       dst     = ["10.1.2.0/26"]
       dports  = ["3389", "22"]
       comment = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name    = "AllowGatewayManagerInbound"
-      prio    = 110
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["GatewayManager"]
-      dst     = ["*"]
-      dports  = ["443"]
-      comment = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name    = "AllowAzureLoadBalancerInbound"
-      prio    = 120
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = ["AzureLoadBalancer"]
-      dst     = ["*"]
-      dports  = ["443"]
-      comment = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name    = "AllowBastionHostCommunication"
-      prio    = 130
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["VirtualNetwork"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["8080", "5701"]
-      comment = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name    = "AllowVnetInbound"
-      prio    = 65000
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["VirtualNetwork"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "AllowAzureLoadBalancerInbound2"
-      prio    = 65001
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["AzureLoadBalancer"]
-      dst     = ["*"]
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "DenyAllInbound"
-      prio    = 65500
-      dir     = "Inbound"
-      acc     = "Deny"
-      proto   = "*"
-      src     = ["*"]
-      dst     = ["*"]
-      dports  = ["*"]
-      comment = ""
-    },
-    // Outbound rules
-    {
-      name    = "AllowVnetOutBound"
-      prio    = 65000
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["VirtualNetwork"]
-      dst     = ["VirtualNetwork"]
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "AllowInternetOutBound"
-      prio    = 65001
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = ["*"]
-      dst     = ["Internet"]
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "DenyAllOutBound"
-      prio    = 65500
-      dir     = "Outbound"
-      acc     = "Deny"
-      proto   = "*"
-      src     = ["*"]
-      dst     = ["*"]
-      dports  = ["*"]
-      comment = ""
     }
+    # 必要なカスタムルールがあればここに追記
   ]
 
   # Bastion用NSGルール
