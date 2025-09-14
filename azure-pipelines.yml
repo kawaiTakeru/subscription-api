@@ -91,7 +91,7 @@ stages:
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
-                    terraform apply -no-color -input=false -auto-approve -target=azurerm_subscription.spoke
+                    terraform apply -no-color -input=false -auto-approve -target=azapi_resource.subscription[0]
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
                     $output = terraform output -json created_subscription_id
                     $createdSubId = $output | ConvertFrom-Json
