@@ -105,86 +105,332 @@ locals {
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # -----------------------------------------------------------
-  # NSGルール定義（0912を参考に要件修正版）
-  # -----------------------------------------------------------
-  # subnet_nsgは0912のまま
-  subnet_nsg_rules = []
-
-  # Azure Bastion Subnet用必須NSGルール（0912ベース＋要件で上書き）
-  bastion_nsg_rules = [
+  # --- Public Subnet NSGルール ---
+  public_subnet_nsg_rules = [
     {
-      name   = "AllowGatewayManagerInbound"
-      prio   = 100
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "GatewayManager"
-      dst    = "*"
-      dports = ["443"]
+      name                       = "AllowBastionInbound"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["3389", "22"]
+      source_address_prefix      = "*"
+      destination_address_prefix = var.bastion_subnet_cidr
+      description                = "Bastionの利用に必要な設定を追加"
     },
     {
-      name   = "AllowAzureLoadBalancerInbound"
-      prio   = 105
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "AzureLoadBalancer"
-      dst    = "*"
-      dports = ["443"]
+      name                       = "AllowGatewayManagerInbound"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "GatewayManager"
+      destination_address_prefix = "*"
+      description                = "Bastionの利用に必要な設定を追加"
     },
     {
-      name   = "AllowHttpsInbound"
-      prio   = 110
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = local.bastion_https_source
-      dst    = "*"
-      dports = ["443"]
+      name                       = "AllowAzureLoadBalancerInbound"
+      priority                   = 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "AzureLoadBalancer"
+      destination_address_prefix = "*"
+      description                = "Bastionの利用に必要な設定を追加"
     },
     {
-      name   = "AllowSshRdpOutbound"
-      prio   = 200
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "*"
-      dst    = "VirtualNetwork"
-      dports = ["22","3389"]
-    },
-    {
-      name   = "AllowAzureCloudOutbound"
-      prio   = 210
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "*"
-      dst    = "AzureCloud"
-      dports = ["443"]
-    },
-    {
-      name   = "AllowBastionCommunicationOutbound"
-      prio   = 220
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "VirtualNetwork"
-      dst    = "VirtualNetwork"
-      dports = ["8080","5701"]
-    },
-    {
-      name   = "AllowHttpOutbound"
-      prio   = 230
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "*"
-      dst    = "Internet"
-      dports = ["80"]
+      name                       = "AllowBastionHostCommunication"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["8080", "5701"]
+      source_address_prefix      = "VirtualNetwork"
+      destination_address_prefix = "VirtualNetwork"
+      description                = "Bastionの利用に必要な設定を追加"
     }
+    # デフォルト (65000, 65001, 65500) はAzure自動付与
+  ]
+
+  # --- Public Bastion NSGルール ---
+  public_bastion_nsg_rules = [
+    {
+      name                       = "AllowHttpsInbound"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "Internet"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowGatewayManagerInbound"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "GatewayManager"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowAzureLoadBalancerInbound"
+      priority                   = 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "AzureLoadBalancer"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowBastionHostCommunication"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["8080", "5701"]
+      source_address_prefix      = "VirtualNetwork"
+      destination_address_prefix = "VirtualNetwork"
+    },
+    # 送信ルール
+    {
+      name                       = "AllowSshRdpOutbound"
+      priority                   = 100
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["22", "3389"]
+      source_address_prefix      = "*"
+      destination_address_prefix = "VirtualNetwork"
+    },
+    {
+      name                       = "AllowAzureCloudOutbound"
+      priority                   = 110
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "*"
+      destination_address_prefix = "AzureCloud"
+    },
+    {
+      name                       = "AllowBastionCommunication"
+      priority                   = 120
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["8080", "5701"]
+      source_address_prefix      = "VirtualNetwork"
+      destination_address_prefix = "VirtualNetwork"
+    },
+    {
+      name                       = "AllowHttpOutbound"
+      priority                   = 130
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["80"]
+      source_address_prefix      = "*"
+      destination_address_prefix = "Internet"
+    }
+    # デフォルト (65000, 65001, 65500) はAzure自動付与
+  ]
+
+  # --- Private Subnet NSGルール ---
+  private_subnet_nsg_rules = [
+    {
+      name                       = "AllowBastionInbound"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["3389", "22"]
+      source_address_prefix      = var.kudan_kaikan_ip_range
+      destination_address_prefix = var.bastion_subnet_cidr
+      description                = "Bastionの利用に必要な設定を追加"
+    }
+    # デフォルト (65000, 65001, 65500) はAzure自動付与
+  ]
+
+  # --- Private Bastion NSGルール ---
+  private_bastion_nsg_rules = [
+    {
+      name                       = "AllowInbound"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "219.54.131.37"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowGatewayManager"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "GatewayManager"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowAzureLoadBalancer"
+      priority                   = 120
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "AzureLoadBalancer"
+      destination_address_prefix = "*"
+    },
+    {
+      name                       = "AllowBastionHostCommunications"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["8080", "5701"]
+      source_address_prefix      = "VirtualNetwork"
+      destination_address_prefix = "VirtualNetwork"
+    },
+    # 送信ルール
+    {
+      name                       = "AllowSshRdpOutbound"
+      priority                   = 100
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["22", "3389"]
+      source_address_prefix      = "*"
+      destination_address_prefix = "VirtualNetwork"
+    },
+    {
+      name                       = "AllowAzureCloudOutbound"
+      priority                   = 110
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_ranges    = ["443"]
+      source_address_prefix      = "*"
+      destination_address_prefix = "AzureCloud"
+    },
+    {
+      name                       = "AllowBastionCommunication"
+      priority                   = 120
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "*"
+      source_port_range          = "*"
+      destination_port_ranges    = ["8080", "5701"]
+      source_address_prefix      = "VirtualNetwork"
+      destination_address_prefix = "VirtualNetwork"
+    }
+    # デフォルト (65000, 65001, 65500) はAzure自動付与
   ]
 }
+
+# -----------------------------------------------------------
+# Resource Group
+# -----------------------------------------------------------
+resource "azurerm_resource_group" "rg" {
+  provider = azurerm.spoke
+  name     = local.name_rg
+  location = var.region
+}
+
+# -----------------------------------------------------------
+# Virtual Network
+# -----------------------------------------------------------
+resource "azurerm_virtual_network" "vnet" {
+  provider            = azurerm.spoke
+  name                = local.name_vnet
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.vnet_number_of_ips
+  }
+}
+
+# -----------------------------------------------------------
+# NSG（業務用）
+# -----------------------------------------------------------
+resource "azurerm_network_security_group" "subnet_nsg" {
+  provider            = azurerm.spoke
+  name                = local.name_nsg
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  dynamic "security_rule" {
+    for_each = local.is_public ? { for r in local.public_subnet_nsg_rules : r.name => r }
+                               : { for r in local.private_subnet_nsg_rules : r.name => r }
+    content {
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.priority
+      direction                  = security_rule.value.direction
+      access                     = security_rule.value.access
+      protocol                   = security_rule.value.protocol
+      source_port_range          = security_rule.value.source_port_range
+      destination_port_ranges    = security_rule.value.destination_port_ranges
+      source_address_prefix      = security_rule.value.source_address_prefix
+      destination_address_prefix = security_rule.value.destination_address_prefix
+      description                = lookup(security_rule.value, "description", null)
+    }
+  }
+}
+
+# -----------------------------------------------------------
+# Bastion用NSG
+# -----------------------------------------------------------
+resource "azurerm_network_security_group" "bastion_nsg" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_nsg
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  dynamic "security_rule" {
+    for_each = local.is_public ? { for r in local.public_bastion_nsg_rules : r.name => r }
+                               : { for r in local.private_bastion_nsg_rules : r.name => r }
+    content {
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.priority
+      direction                  = security_rule.value.direction
+      access                     = security_rule.value.access
+      protocol                   = security_rule.value.protocol
+      source_port_range          = security_rule.value.source_port_range
+      destination_port_ranges    = security_rule.value.destination_port_ranges
+      source_address_prefix      = security_rule.value.source_address_prefix
+      destination_address_prefix = security_rule.value.destination_address_prefix
+      description                = lookup(security_rule.value, "description", null)
+    }
+  }
+}
+
 
 # -----------------------------------------------------------
 # Resource Group
