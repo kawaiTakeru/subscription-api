@@ -697,7 +697,7 @@ output "base_naming"               { value = local.base }
 output "rg_expected_name"          { value = local.name_rg }
 output "vnet_expected_name"        { value = local.name_vnet }
 output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "created_subscription_id"   { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+
 output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
 output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
 output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
