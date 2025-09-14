@@ -105,93 +105,18 @@ locals {
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # NSGルール（型整合。両側で必ず同じkey/数にする！）
-  subnet_nsg_rules = local.is_private ? [
+  # -----------------------------------------------------------
+  # Subnet用NSGルール定義（public/privateで数・型を揃える）
+  # -----------------------------------------------------------
+  subnet_nsg_rules = [
+    // Inbound rules
     {
       name    = "AllowBastionInbound"
       prio    = 100
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = ["203.0.113.0/24"]
-      dst     = ["10.1.2.0/26"]
-      dports  = ["3389", "22"]
-      comment = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name    = "AllowVnetInbound"
-      prio    = 65000
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = "VirtualNetwork"
-      dst     = "VirtualNetwork"
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "AllowAzureLoadBalancerInbound"
-      prio    = 65001
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = "AzureLoadBalancer"
-      dst     = "*"
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "DenyAllInbound"
-      prio    = 65500
-      dir     = "Inbound"
-      acc     = "Deny"
-      proto   = "*"
-      src     = "*"
-      dst     = "*"
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "AllowVnetOutBound"
-      prio    = 65000
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = "VirtualNetwork"
-      dst     = "VirtualNetwork"
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "AllowInternetOutBound"
-      prio    = 65001
-      dir     = "Outbound"
-      acc     = "Allow"
-      proto   = "*"
-      src     = "*"
-      dst     = "Internet"
-      dports  = ["*"]
-      comment = ""
-    },
-    {
-      name    = "DenyAllOutBound"
-      prio    = 65500
-      dir     = "Outbound"
-      acc     = "Deny"
-      proto   = "*"
-      src     = "*"
-      dst     = "*"
-      dports  = ["*"]
-      comment = ""
-    }
-  ] : [
-    {
-      name    = "AllowBastionInbound"
-      prio    = 100
-      dir     = "Inbound"
-      acc     = "Allow"
-      proto   = "Tcp"
-      src     = "*"
+      src     = local.is_private ? ["203.0.113.0/24"] : ["*"]
       dst     = ["10.1.2.0/26"]
       dports  = ["3389", "22"]
       comment = "Bastionの利用に必要な設定を追加"
@@ -202,8 +127,8 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = "GatewayManager"
-      dst     = "*"
+      src     = local.is_private ? ["GatewayManager"] : ["GatewayManager"]
+      dst     = ["*"]
       dports  = ["443"]
       comment = "Bastionの利用に必要な設定を追加"
     },
@@ -213,8 +138,8 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = "AzureLoadBalancer"
-      dst     = "*"
+      src     = local.is_private ? ["AzureLoadBalancer"] : ["AzureLoadBalancer"]
+      dst     = ["*"]
       dports  = ["443"]
       comment = "Bastionの利用に必要な設定を追加"
     },
@@ -224,8 +149,8 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "*"
-      src     = "VirtualNetwork"
-      dst     = "VirtualNetwork"
+      src     = ["VirtualNetwork"]
+      dst     = ["VirtualNetwork"]
       dports  = ["8080", "5701"]
       comment = "Bastionの利用に必要な設定を追加"
     },
@@ -235,19 +160,19 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "*"
-      src     = "VirtualNetwork"
-      dst     = "VirtualNetwork"
+      src     = ["VirtualNetwork"]
+      dst     = ["VirtualNetwork"]
       dports  = ["*"]
       comment = ""
     },
     {
-      name    = "AllowAzureLoadBalancerInbound"
+      name    = "AllowAzureLoadBalancerInbound2"
       prio    = 65001
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "*"
-      src     = "AzureLoadBalancer"
-      dst     = "*"
+      src     = ["AzureLoadBalancer"]
+      dst     = ["*"]
       dports  = ["*"]
       comment = ""
     },
@@ -257,19 +182,20 @@ locals {
       dir     = "Inbound"
       acc     = "Deny"
       proto   = "*"
-      src     = "*"
-      dst     = "*"
+      src     = ["*"]
+      dst     = ["*"]
       dports  = ["*"]
       comment = ""
     },
+    // Outbound rules
     {
       name    = "AllowVnetOutBound"
       prio    = 65000
       dir     = "Outbound"
       acc     = "Allow"
       proto   = "*"
-      src     = "VirtualNetwork"
-      dst     = "VirtualNetwork"
+      src     = ["VirtualNetwork"]
+      dst     = ["VirtualNetwork"]
       dports  = ["*"]
       comment = ""
     },
@@ -279,8 +205,8 @@ locals {
       dir     = "Outbound"
       acc     = "Allow"
       proto   = "*"
-      src     = "*"
-      dst     = "Internet"
+      src     = ["*"]
+      dst     = ["Internet"]
       dports  = ["*"]
       comment = ""
     },
@@ -290,8 +216,8 @@ locals {
       dir     = "Outbound"
       acc     = "Deny"
       proto   = "*"
-      src     = "*"
-      dst     = "*"
+      src     = ["*"]
+      dst     = ["*"]
       dports  = ["*"]
       comment = ""
     }
@@ -371,6 +297,7 @@ locals {
     }
   ]
 }
+
 # -----------------------------------------------------------
 # Resource Group
 # -----------------------------------------------------------
@@ -415,18 +342,11 @@ resource "azurerm_network_security_group" "subnet_nsg" {
       source_port_range          = "*"
       destination_port_ranges    = security_rule.value.dports
 
-      source_address_prefix = (
-        can(regex("^\\[", tostring(security_rule.value.src))) ? null : security_rule.value.src
-      )
-      source_address_prefixes = (
-        can(regex("^\\[", tostring(security_rule.value.src))) ? security_rule.value.src : null
-      )
-      destination_address_prefix = (
-        can(regex("^\\[", tostring(security_rule.value.dst))) ? null : security_rule.value.dst
-      )
-      destination_address_prefixes = (
-        can(regex("^\\[", tostring(security_rule.value.dst))) ? security_rule.value.dst : null
-      )
+      # 配列かどうかでprefix/prefixesを切り替え
+      source_address_prefix      = length(security_rule.value.src) == 1 ? security_rule.value.src[0] : null
+      source_address_prefixes    = length(security_rule.value.src) > 1 ? security_rule.value.src : null
+      destination_address_prefix = length(security_rule.value.dst) == 1 ? security_rule.value.dst[0] : null
+      destination_address_prefixes = length(security_rule.value.dst) > 1 ? security_rule.value.dst : null
     }
   }
 }
