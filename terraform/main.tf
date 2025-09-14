@@ -90,7 +90,7 @@ locals {
       source_port_range          = "*"
       destination_port_ranges    = ["3389", "22"]
       source_address_prefix      = "*"
-      destination_address_prefix = azurerm_subnet.bastion_subnet.address_prefixes[0]
+      destination_address_prefix = "BASTION_SUBNET"
       description                = "Bastionの利用に必要な設定を追加"
     },
     {
@@ -235,7 +235,7 @@ locals {
       source_port_range          = "*"
       destination_port_ranges    = ["3389", "22"]
       source_address_prefix      = "219.54.131.37/32"
-      destination_address_prefix = azurerm_subnet.bastion_subnet.address_prefixes[0]
+      destination_address_prefix = "BASTION_SUBNET"
       description                = "Bastionの利用に必要な設定を追加"
     }
   ]
@@ -367,7 +367,11 @@ resource "azurerm_network_security_group" "subnet_nsg" {
       source_port_range          = security_rule.value.source_port_range
       destination_port_ranges    = security_rule.value.destination_port_ranges
       source_address_prefix      = security_rule.value.source_address_prefix
-      destination_address_prefix = security_rule.value.destination_address_prefix
+      destination_address_prefix = (
+        security_rule.value.destination_address_prefix == "BASTION_SUBNET"
+        ? azurerm_subnet.bastion_subnet.address_prefixes[0]
+        : security_rule.value.destination_address_prefix
+      )
       description                = lookup(security_rule.value, "description", null)
     }
   }
