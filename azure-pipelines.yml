@@ -368,5 +368,4 @@ stages:
                 try {
                   terraform init -no-color -input=false
                   terraform apply -no-color -input=false -auto-approve -target azurerm_virtual_network_peering.spoke_to_hub
-                  if ($LASTEXITCODE -ne 0) { throw "Peering Spoke->Hub apply failed" }
-                } finally { Pop-Location }
+                  if ($LASTEXITCODE -ne 0) { throw "Pe
