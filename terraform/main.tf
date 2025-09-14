@@ -106,10 +106,11 @@ locals {
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
   # -----------------------------------------------------------
-  # カスタムNSGルールのみ定義（デフォルトルールはAzureで自動付与されるため定義不要）
+  # 必ずsubnet_nsg_rulesを宣言してください（空でもOK）
   # -----------------------------------------------------------
+  subnet_nsg_rules = []
 
-  # ---- private Bastion NSG（画像指定通り） ----
+  # private bastion NSGルール例（必要に応じて他のルールもここに）
   private_bastion_nsg_rules = [
     {
       name   = "AllowInbound"
@@ -153,14 +154,8 @@ locals {
     }
   ]
 
-  # ---- 他のNSGルール分岐 ----
-  # public/private, bastion/通常で分岐（ここでは例として従来のまま）
-
-  # 通常サブネットNSG（public/private用：既存のロジック/指定があればここで上書き）
-
-  # Bastion NSGルール切り替え
+  # Bastion NSGルール切り替え（例）
   bastion_nsg_rules = local.is_private ? local.private_bastion_nsg_rules : [
-    # public bastion NSGルール（従来どおり、必要に応じて修正）
     {
       name    = "AllowHttpsInbound"
       prio    = 100
