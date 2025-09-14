@@ -102,7 +102,7 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # サブネットNSGルール定義
+  # サブネットNSGルール定義（全要素・フィールド一致）
   subnet_nsg_rules = local.is_private ? [
     {
       name   = "AllowBastionInbound"
@@ -293,8 +293,7 @@ locals {
       comment = ""
     }
   ]
-
-  # Bastion用NSGルール定義（従来通り省略）
+  # Bastion用NSGルール定義（既存のまま）
   bastion_nsg_rules = [
     {
       name   = "AllowGatewayManagerInbound"
@@ -322,7 +321,7 @@ locals {
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
-      src    = local.bastion_https_source
+      src    = local.is_public ? "Internet" : var.vpn_client_pool_cidr
       dst    = "*"
       dports = ["443"]
     },
