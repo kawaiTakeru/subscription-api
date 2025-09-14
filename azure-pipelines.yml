@@ -62,6 +62,7 @@ stages:
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
               TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: pscore
