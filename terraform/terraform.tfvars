@@ -39,7 +39,7 @@ billing_profile_name  = "IAMZ-4Q5A-BG7-PGB"
 invoice_section_name  = "6HB2-O3GL-PJA-PGB"
 
 # 管理グループ
-management_group_id   = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+#management_group_id   = "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
 # ===========================================================
 # VNet / Subnet / NSG構成
