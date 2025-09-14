@@ -81,7 +81,7 @@ locals {
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
   sub_properties_base = {
-    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
+    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
     workload     = var.subscription_workload
     billingScope = local.billing_scope
   }
@@ -345,15 +345,10 @@ locals {
 # -----------------------------------------------------------
 resource "azurerm_subscription" "spoke" {
   count = var.create_subscription ? 1 : 0
-  billing_scope_id  = (
-    var.billing_account_name != "" &&
-    var.billing_profile_name != "" &&
-    var.invoice_section_name != ""
-  ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
-
-  subscription_name = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
-  workload                = var.subscription_workload
-  management_group_id     = var.management_group_id != "" ? var.management_group_id : null
+  billing_scope_id     = local.billing_scope
+  subscription_name    = var.subscription_display_name != "" ? var.subscription_display_name : "sub-${local.base}"
+  workload             = var.subscription_workload
+  management_group_id  = var.management_group_id != "" ? var.management_group_id : null
 }
 
 # -----------------------------------------------------------
