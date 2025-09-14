@@ -104,11 +104,8 @@ stages:
                 }
 
                 function Get-AliasName($tfvarsPath) {
-                  # var.subscription_alias_name が指定されていればそれを優先
                   $explicit = Get-TfVar $tfvarsPath "subscription_alias_name"
                   if ($explicit) { return $explicit }
-
-                  # locals と同一ロジックで base を算出して "alias-${base}"
                   $projectParam = "${{ parameters.project_name }}"
                   $purpose = Get-TfVar $tfvarsPath "purpose_name"
                   $envId   = "${{ parameters.environment_id }}"
@@ -156,37 +153,19 @@ stages:
                   try {
                     terraform init -no-color -input=false
 
-                    # 1) alias 作成（target）
+                    # 1) alias 作成（target のみ）
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
-                    # 2) Output を state に載せるため refresh-only を実行
-                    terraform apply -no-color -input=false -auto-approve -refresh-only
-
-                    # 3) 生成 ID を取得（下記の順で試行）
-                    #    a. terraform output
-                    #    b. state の alias id 経由で REST
-                    #    c. 予測 alias 名で REST
+                    # 2) 生成 ID を取得（REST のみで取得。※ refresh-only/terraform output は使わない）
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
 
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
-                      # a) terraform output
-                      try {
-                        $raw = terraform output -raw created_subscription_id 2>$null
-                        if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
-                      } catch {}
-
-                      # b) state の alias id
-                      if (-not $createdSubId) {
-                        $createdSubId = Try-GetSubIdViaAliasIdFromState
-                      }
-
-                      # c) alias 名から直接
+                      $createdSubId = Try-GetSubIdViaAliasIdFromState
                       if (-not $createdSubId -and $aliasName) {
                         $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName
                       }
-
                       if (-not $createdSubId) {
                         Write-Host "[Step0] Waiting subscriptionId... ($i/36)"
                         Start-Sleep -Seconds 10
@@ -195,8 +174,9 @@ stages:
 
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 4) Azure CLI が新規サブスクを認識するまで軽く待機（最大 30回 x 10秒）
+                    # 3) Azure CLI が新規サブスクを認識するまで待機
                     for ($j=1; $j -le 30; $j++) {
+                      az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
                       if ($LASTEXITCODE -eq 0) { break }
                       Start-Sleep -Seconds 10
@@ -237,7 +217,10 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
+                # 新規サブスクの認識を明示的に更新してから set
+                az account list --refresh 1>$null
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
+
                 # tfvars/命名関数
                 function Get-TfVar {
                   param([string]$Path,[string]$Key)
@@ -287,7 +270,6 @@ stages:
                   terraform apply -no-color -input=false -auto-approve -target azurerm_resource_group.rg
                   if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
                 } finally { Pop-Location }
-
 
           # Step2: VNet作成
           - task: AzureCLI@2
