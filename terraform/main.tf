@@ -214,7 +214,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -225,7 +225,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -236,7 +236,7 @@ locals {
     {
       name                       = "AllowHttpOutbound"
       priority                   = 130
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -289,7 +289,7 @@ locals {
     {
       name                       = "AllowAzureLoadBalancer"
       priority                   = 120
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -300,7 +300,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -312,7 +312,7 @@ locals {
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -323,7 +323,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -334,7 +334,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -673,6 +673,16 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
     azurerm_virtual_network.vnet,
     azurerm_virtual_network_peering.hub_to_spoke
   ]
+}
+
+
+
+# ★ ここを修正：alias作成直後（target apply直後）でもIDを確実に返す
+output "created_subscription_id" {
+  value = coalesce(
+    try(data.azapi_resource.subscription_get[0].output.properties.subscriptionId, null),
+    try(azapi_resource.subscription[0].output.properties.subscriptionId, null)
+  )
 }
 
 # -----------------------------------------------------------
