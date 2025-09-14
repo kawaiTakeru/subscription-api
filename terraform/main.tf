@@ -36,10 +36,11 @@ locals {
   # サブスクリプション新規作成判定（spoke_subscription_id未指定かつcreate_subscription=true）
   need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
 
-  # 新規作成時はazapi経由で取得、既存流用時はそのまま
+  # 新規作成時は azapi の data/resource から取得、既存流用時はそのまま
   effective_spoke_subscription_id = coalesce(
-    var.spoke_subscription_id,
-    try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, "")
+    var.spoke_subscription_id != "" ? var.spoke_subscription_id : null,
+    local.need_create_subscription ? try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, null) : null,
+    local.need_create_subscription ? try(jsondecode(azapi_resource.subscription[0].output).properties.subscriptionId, null) : null
   )
 
   project_raw = trimspace(var.project_name)
@@ -671,11 +672,13 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# ★ jsondecode を適用して GUID だけを返す
+# ★ created_subscription_id：既存なら var を、作成なら data/resource を jsondecode して GUID を返す
 output "created_subscription_id" {
+  description = "Spoke subscription id (newly created or reused)."
   value = coalesce(
-    try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, null),
-    try(jsondecode(azapi_resource.subscription[0].output).properties.subscriptionId, null)
+    var.spoke_subscription_id != "" ? var.spoke_subscription_id : null,
+    local.need_create_subscription ? try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, null) : null,
+    local.need_create_subscription ? try(jsondecode(azapi_resource.subscription[0].output).properties.subscriptionId, null) : null
   )
 }
 
