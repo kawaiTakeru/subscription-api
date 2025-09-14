@@ -62,48 +62,22 @@ locals {
   name_vnet                = local.base != "" ? "vnet-${local.base}" : null
   name_subnet              = local.project_slug != "" ? "snet-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_nsg                 = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-${local.purpose_slug}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_sr_allow            = local.base != "" ? "sr-${local.base}-001" : null
-  name_sr_deny_internet_in = local.base != "" ? "sr-${local.base}-002" : null
-  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
-  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
   name_bastion_nsg         = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_host        = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip   = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
-  # NATGW/PIP命名を「ng」に統一
   name_natgw     = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_natgw_pip = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
-  # ルートテーブル/UDR命名
   name_route_table = local.base != "" ? "rt-${local.base}" : null
   name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
   name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
   name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
-
-  # Billing Scope（MCA用）
-  billing_scope = (
-    var.billing_account_name != "" &&
-    var.billing_profile_name != "" &&
-    var.invoice_section_name != ""
-  ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
-
-  sub_properties_base = {
-    displayName  = var.subscription_display_name != "" ? var.subscription_display_name : (local.base != "" ? "sub-${local.base}" : "")
-    workload     = var.subscription_workload
-    billingScope = local.billing_scope
-  }
-  sub_properties_extra = var.management_group_id != "" ? {
-    additionalProperties = { managementGroupId = var.management_group_id }
-  } : {}
-  sub_properties = merge(local.sub_properties_base, local.sub_properties_extra)
+  name_vnetpeer_hub2spoke  = local.base != "" ? "vnetpeerhub2spoke-${local.base}" : null
+  name_vnetpeer_spoke2hub  = local.base != "" ? "vnetpeerspoke2hub-${local.base}" : null
 
   # パブリック・プライベートVNet判定
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
-
-  # Bastion 443受信元
-  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
   # --- Public Subnet NSGルール ---
   public_subnet_nsg_rules = [
@@ -155,7 +129,6 @@ locals {
       destination_address_prefix = "VirtualNetwork"
       description                = "Bastionの利用に必要な設定を追加"
     }
-    # デフォルト (65000, 65001, 65500) はAzure自動付与
   ]
 
   # --- Public Bastion NSGルール ---
@@ -249,7 +222,6 @@ locals {
       source_address_prefix      = "*"
       destination_address_prefix = "Internet"
     }
-    # デフォルト (65000, 65001, 65500) はAzure自動付与
   ]
 
   # --- Private Subnet NSGルール ---
@@ -266,7 +238,6 @@ locals {
       destination_address_prefix = var.bastion_subnet_cidr
       description                = "Bastionの利用に必要な設定を追加"
     }
-    # デフォルト (65000, 65001, 65500) はAzure自動付与
   ]
 
   # --- Private Bastion NSGルール ---
@@ -349,7 +320,6 @@ locals {
       source_address_prefix      = "VirtualNetwork"
       destination_address_prefix = "VirtualNetwork"
     }
-    # デフォルト (65000, 65001, 65500) はAzure自動付与
   ]
 }
 
@@ -378,7 +348,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 # -----------------------------------------------------------
-# NSG（業務用）
+# NSG（業務用/サブネット用）- 1回だけ定義
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
@@ -387,8 +357,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   resource_group_name = azurerm_resource_group.rg.name
 
   dynamic "security_rule" {
-    for_each = local.is_public ? { for r in local.public_subnet_nsg_rules : r.name => r }
-                               : { for r in local.private_subnet_nsg_rules : r.name => r }
+    for_each = local.is_public ? { for r in local.public_subnet_nsg_rules : r.name => r } : { for r in local.private_subnet_nsg_rules : r.name => r }
     content {
       name                       = security_rule.value.name
       priority                   = security_rule.value.priority
@@ -405,7 +374,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
 }
 
 # -----------------------------------------------------------
-# Bastion用NSG
+# Bastion用NSG - 1回だけ定義
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
@@ -414,8 +383,7 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   resource_group_name = azurerm_resource_group.rg.name
 
   dynamic "security_rule" {
-    for_each = local.is_public ? { for r in local.public_bastion_nsg_rules : r.name => r }
-                               : { for r in local.private_bastion_nsg_rules : r.name => r }
+    for_each = local.is_public ? { for r in local.public_bastion_nsg_rules : r.name => r } : { for r in local.private_bastion_nsg_rules : r.name => r }
     content {
       name                       = security_rule.value.name
       priority                   = security_rule.value.priority
@@ -427,66 +395,6 @@ resource "azurerm_network_security_group" "bastion_nsg" {
       source_address_prefix      = security_rule.value.source_address_prefix
       destination_address_prefix = security_rule.value.destination_address_prefix
       description                = lookup(security_rule.value, "description", null)
-    }
-  }
-}
-
-
-# -----------------------------------------------------------
-# Resource Group
-# -----------------------------------------------------------
-resource "azurerm_resource_group" "rg" {
-  provider = azurerm.spoke
-  name     = local.name_rg
-  location = var.region
-}
-
-# -----------------------------------------------------------
-# Virtual Network
-# -----------------------------------------------------------
-resource "azurerm_virtual_network" "vnet" {
-  provider            = azurerm.spoke
-  name                = local.name_vnet
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  ip_address_pool {
-    id                     = var.ipam_pool_id
-    number_of_ip_addresses = var.vnet_number_of_ips
-  }
-}
-
-# -----------------------------------------------------------
-# NSG（業務用）
-# -----------------------------------------------------------
-resource "azurerm_network_security_group" "subnet_nsg" {
-  provider            = azurerm.spoke
-  name                = local.name_nsg
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-}
-
-# -----------------------------------------------------------
-# Bastion用NSG
-# -----------------------------------------------------------
-resource "azurerm_network_security_group" "bastion_nsg" {
-  provider            = azurerm.spoke
-  name                = local.name_bastion_nsg
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  dynamic "security_rule" {
-    for_each = { for r in local.bastion_nsg_rules : r.name => r }
-    content {
-      name                       = security_rule.value.name
-      priority                   = security_rule.value.prio
-      direction                  = security_rule.value.dir
-      access                     = security_rule.value.acc
-      protocol                   = security_rule.value.proto
-      source_port_range          = "*"
-      destination_port_ranges    = security_rule.value.dports
-      source_address_prefix      = security_rule.value.src
-      destination_address_prefix = security_rule.value.dst
     }
   }
 }
