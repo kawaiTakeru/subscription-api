@@ -17,6 +17,9 @@ parameters:
     type: string
     default: private
     values: [private, public]
+  - name: management_group_id
+    type: string
+    default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
 
 trigger: none
 pr: none
