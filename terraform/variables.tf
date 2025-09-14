@@ -214,19 +214,3 @@ variable "allowed_port" {
   type        = number
   default     = 3389
 }
-
-# -----------------------------------------------------------
-# NSGカスタムルール用追加変数
-# -----------------------------------------------------------
-
-# 九段会館のIPレンジ（privateサブネット/バスチオンNSGのsrcで利用）
-variable "kudan_kaikan_ip_range" {
-  description = "九段会館のIPレンジ（例: 203.0.113.0/24 など）"
-  type        = string
-}
-
-# AzureBastionSubnetのCIDR（private/publicサブネットNSGのdstで利用）
-variable "bastion_subnet_cidr" {
-  description = "AzureBastionSubnetのCIDR（例: 10.1.2.0/26 など）"
-  type        = string
-}
