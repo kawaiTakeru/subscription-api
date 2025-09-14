@@ -57,7 +57,9 @@ variable "subscription_display_name" {
   default     = ""
 }
 
+# -----------------------------------------------------------
 # 課金系パラメータ（MCA用）
+# -----------------------------------------------------------
 variable "billing_account_name" {
   description = "課金アカウント名"
   type        = string
@@ -71,42 +73,54 @@ variable "invoice_section_name" {
   type        = string
 }
 
+# -----------------------------------------------------------
 # Workload種別（Production / DevTest）
+# -----------------------------------------------------------
 variable "subscription_workload" {
   description = "Workload種別 (Production / DevTest)"
   type        = string
   default     = "Production"
 }
 
+# -----------------------------------------------------------
 # サブスクリプション新規作成フラグ（既存流用の場合はfalse）
+# -----------------------------------------------------------
 variable "create_subscription" {
   description = "サブスクリプション（エイリアス）新規作成可否"
   type        = bool
   default     = true
 }
 
+# -----------------------------------------------------------
 # 将来の拡張用（現状未使用）
+# -----------------------------------------------------------
 variable "enable_billing_check" {
   description = "課金情報の読み取りチェック（未使用／将来拡張用）"
   type        = bool
   default     = false
 }
 
+# -----------------------------------------------------------
 # SpokeサブスクリプションID（既存利用時に指定）
+# -----------------------------------------------------------
 variable "spoke_subscription_id" {
   description = "Spoke Subscription ID（既存利用時、pipeline注入）"
   type        = string
   default     = ""
 }
 
+# -----------------------------------------------------------
 # テナントID（必要に応じて）
+# -----------------------------------------------------------
 variable "spoke_tenant_id" {
   description = "Spoke Tenant ID（必要時のみ）"
   type        = string
   default     = ""
 }
 
+# -----------------------------------------------------------
 # 管理グループリソースID
+# -----------------------------------------------------------
 variable "management_group_id" {
   description = "管理グループのリソースID（/providers/Microsoft.Management/managementGroups/<mg-name>）"
   type        = string
@@ -170,7 +184,9 @@ variable "bastion_subnet_number_of_ips" {
   default     = 64
 }
 
+# -----------------------------------------------------------
 # VNet種別（public/private）: Bastion NSG命名やルール切替に利用
+# -----------------------------------------------------------
 variable "vnet_type" {
   description = "VNet種別（public/private）"
   type        = string
@@ -182,13 +198,17 @@ variable "vnet_type" {
   }
 }
 
+# -----------------------------------------------------------
 # VPNクライアントプールCIDR（許可元）
+# -----------------------------------------------------------
 variable "vpn_client_pool_cidr" {
   description = "VPNクライアントプールCIDR（許可元）"
   type        = string
 }
 
+# -----------------------------------------------------------
 # サブネットで許可するポート番号（例: RDP=3389, SSH=22等）
+# -----------------------------------------------------------
 variable "allowed_port" {
   description = "許可ポート（RDP=3389 / SSH=22 等）"
   type        = number
