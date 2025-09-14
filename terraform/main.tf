@@ -110,10 +110,8 @@ locals {
       dir    = "Inbound"
       acc    = "Allow"
       proto  = "Tcp"
-      # ※宛先の対象にIP Addressesを指定し、九段会館のIPレンジを指定
-      src    = ["203.0.113.0/24"] # ここを九段会館のIPレンジに変更
-      # ※宛先の対象にIP Addressesを指定し、AzureBastionSubnetのCIDRを指定
-      dst    = ["10.1.2.0/26"]    # ここをAzureBastionSubnetのCIDRに変更
+      src    = ["203.0.113.0/24"] # 九段会館のIPレンジに置換
+      dst    = ["10.1.2.0/26"]    # AzureBastionSubnetのCIDRに置換
       dports = ["3389", "22"]
       comment = "Bastionの利用に必要な設定を追加"
     },
@@ -126,6 +124,7 @@ locals {
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "AllowAzureLoadBalancerInbound"
@@ -136,6 +135,7 @@ locals {
       src    = "AzureLoadBalancer"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "DenyAllInbound"
@@ -146,9 +146,8 @@ locals {
       src    = "*"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     },
-
-    # --- Outbound ---
     {
       name   = "AllowVnetOutBound"
       prio   = 65000
@@ -158,6 +157,7 @@ locals {
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "AllowInternetOutBound"
@@ -168,6 +168,7 @@ locals {
       src    = "*"
       dst    = "Internet"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "DenyAllOutBound"
@@ -178,9 +179,9 @@ locals {
       src    = "*"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     }
   ] : [
-    # --- Inbound ---
     {
       name   = "AllowBastionInbound"
       prio   = 100
@@ -188,7 +189,7 @@ locals {
       acc    = "Allow"
       proto  = "Tcp"
       src    = "*"
-      dst    = ["10.1.2.0/26"] # ここをAzureBastionSubnetのCIDRに変更
+      dst    = ["10.1.2.0/26"]
       dports = ["3389", "22"]
       comment = "Bastionの利用に必要な設定を追加"
     },
@@ -234,6 +235,7 @@ locals {
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "AllowAzureLoadBalancerInbound"
@@ -244,6 +246,7 @@ locals {
       src    = "AzureLoadBalancer"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "DenyAllInbound"
@@ -254,9 +257,8 @@ locals {
       src    = "*"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     },
-
-    # --- Outbound ---
     {
       name   = "AllowVnetOutBound"
       prio   = 65000
@@ -266,6 +268,7 @@ locals {
       src    = "VirtualNetwork"
       dst    = "VirtualNetwork"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "AllowInternetOutBound"
@@ -276,6 +279,7 @@ locals {
       src    = "*"
       dst    = "Internet"
       dports = ["*"]
+      comment = ""
     },
     {
       name   = "DenyAllOutBound"
@@ -286,12 +290,13 @@ locals {
       src    = "*"
       dst    = "*"
       dports = ["*"]
+      comment = ""
     }
   ]
 
-  # Bastion用NSGルールは従来通り（省略）
+  # Bastion用NSGルール定義（従来通り詳細は省略）
   bastion_nsg_rules = [
-    # ... 必要なルール定義 ...
+    # ... 必要なBastion NSGルール ...
   ]
 }
 
@@ -339,26 +344,17 @@ resource "azurerm_network_security_group" "subnet_nsg" {
       source_port_range          = "*"
       destination_port_ranges    = security_rule.value.dports
 
-      # AllowBastionInboundのみ source/destination_address_prefixes でIPレンジ指定
       source_address_prefix = (
-        security_rule.value.name == "AllowBastionInbound" && can(regex("^\\[", tostring(security_rule.value.src)))
-        ? null
-        : (type(security_rule.value.src) == string ? security_rule.value.src : null)
+        can(regex("^\\[", tostring(security_rule.value.src))) ? null : security_rule.value.src
       )
       source_address_prefixes = (
-        security_rule.value.name == "AllowBastionInbound" && can(regex("^\\[", tostring(security_rule.value.src)))
-        ? security_rule.value.src
-        : null
+        can(regex("^\\[", tostring(security_rule.value.src))) ? security_rule.value.src : null
       )
       destination_address_prefix = (
-        security_rule.value.name == "AllowBastionInbound" && can(regex("^\\[", tostring(security_rule.value.dst)))
-        ? null
-        : (type(security_rule.value.dst) == string ? security_rule.value.dst : null)
+        can(regex("^\\[", tostring(security_rule.value.dst))) ? null : security_rule.value.dst
       )
       destination_address_prefixes = (
-        security_rule.value.name == "AllowBastionInbound" && can(regex("^\\[", tostring(security_rule.value.dst)))
-        ? security_rule.value.dst
-        : null
+        can(regex("^\\[", tostring(security_rule.value.dst))) ? security_rule.value.dst : null
       )
     }
   }
@@ -389,6 +385,89 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   }
 }
 
+# -----------------------------------------------------------
+# Subnet（業務用）
+# -----------------------------------------------------------
+resource "azurerm_subnet" "subnet" {
+  provider             = azurerm.spoke
+  name                 = local.name_subnet
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.subnet_number_of_ips
+  }
+}
+
+# -----------------------------------------------------------
+# Subnet（Bastion用/AzureBastionSubnet）
+# -----------------------------------------------------------
+resource "azurerm_subnet" "bastion_subnet" {
+  provider             = azurerm.spoke
+  name                 = "AzureBastionSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+
+  ip_address_pool {
+    id                     = var.ipam_pool_id
+    number_of_ip_addresses = var.bastion_subnet_number_of_ips
+  }
+}
+
+# -----------------------------------------------------------
+# NSGアソシエーション
+# -----------------------------------------------------------
+resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
+  provider                  = azurerm.spoke
+  subnet_id                 = azurerm_subnet.subnet.id
+  network_security_group_id = azurerm_network_security_group.subnet_nsg.id
+}
+
+resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
+  provider                  = azurerm.spoke
+  subnet_id                 = azurerm_subnet.bastion_subnet.id
+  network_security_group_id = azurerm_network_security_group.bastion_nsg.id
+}
+
+# -----------------------------------------------------------
+# Bastion Public IP
+# -----------------------------------------------------------
+resource "azurerm_public_ip" "bastion_pip" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_public_ip
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  allocation_method = "Static"
+  sku               = "Standard"
+  ip_version        = "IPv4"
+}
+
+# -----------------------------------------------------------
+# Bastion Host
+# -----------------------------------------------------------
+resource "azurerm_bastion_host" "bastion" {
+  provider            = azurerm.spoke
+  name                = local.name_bastion_host
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  sku         = "Standard"
+  scale_units = 2
+
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.bastion_subnet.id
+    public_ip_address_id = azurerm_public_ip.bastion_pip.id
+  }
+
+  copy_paste_enabled     = false
+  file_copy_enabled      = false
+  ip_connect_enabled     = false
+  shareable_link_enabled = false
+  tunneling_enabled      = false
+}
 
 # -----------------------------------------------------------
 # NAT Gateway構成（パブリック環境のみ）
