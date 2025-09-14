@@ -90,7 +90,7 @@ locals {
       source_port_range          = "*"
       destination_port_ranges    = ["3389", "22"]
       source_address_prefix      = "*"
-      destination_address_prefix = var.bastion_subnet_cidr
+      destination_address_prefix = azurerm_subnet.bastion_subnet.address_prefixes[0]
       description                = "Bastionの利用に必要な設定を追加"
     },
     {
@@ -234,8 +234,8 @@ locals {
       protocol                   = "Tcp"
       source_port_range          = "*"
       destination_port_ranges    = ["3389", "22"]
-      source_address_prefix      = var.kudan_kaikan_ip_range
-      destination_address_prefix = var.bastion_subnet_cidr
+      source_address_prefix      = "219.54.131.37/32"
+      destination_address_prefix = azurerm_subnet.bastion_subnet.address_prefixes[0]
       description                = "Bastionの利用に必要な設定を追加"
     }
   ]
