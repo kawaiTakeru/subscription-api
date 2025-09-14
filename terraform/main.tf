@@ -105,7 +105,7 @@ locals {
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # subnet_nsg_rules（型整合）
+  # NSGルール（型整合。両側で必ず同じkey/数にする！）
   subnet_nsg_rules = local.is_private ? [
     {
       name    = "AllowBastionInbound"
@@ -296,8 +296,81 @@ locals {
       comment = ""
     }
   ]
-}
 
+  # Bastion用NSGルール
+  bastion_nsg_rules = [
+    {
+      name   = "AllowGatewayManagerInbound"
+      prio   = 100
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "GatewayManager"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowAzureLoadBalancerInbound"
+      prio   = 105
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "AzureLoadBalancer"
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowHttpsInbound"
+      prio   = 110
+      dir    = "Inbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = local.bastion_https_source
+      dst    = "*"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowSshRdpOutbound"
+      prio   = 200
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "VirtualNetwork"
+      dports = ["22","3389"]
+    },
+    {
+      name   = "AllowAzureCloudOutbound"
+      prio   = 210
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "Tcp"
+      src    = "*"
+      dst    = "AzureCloud"
+      dports = ["443"]
+    },
+    {
+      name   = "AllowBastionCommunicationOutbound"
+      prio   = 220
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "VirtualNetwork"
+      dst    = "VirtualNetwork"
+      dports = ["8080","5701"]
+    },
+    {
+      name   = "AllowHttpOutbound"
+      prio   = 230
+      dir    = "Outbound"
+      acc    = "Allow"
+      proto  = "*"
+      src    = "*"
+      dst    = "Internet"
+      dports = ["80"]
+    }
+  ]
+}
 # -----------------------------------------------------------
 # Resource Group
 # -----------------------------------------------------------
