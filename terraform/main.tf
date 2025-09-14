@@ -102,101 +102,142 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 443受信元
-  bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
+  # 画像に従い、カスタム追加が必要なルールのみ定義する
 
-  # -----------------------------------------------------------
-  # カスタムNSGルールのみ定義（デフォルトルールはAzureで自動付与されるため定義不要）
-  # -----------------------------------------------------------
-  subnet_nsg_rules = [
-    // 例: Bastion用受信ルールのみ。ほかに必要なカスタムルールがあれば追加
+  # Public Subnet NSGルール（画像1）: AllowBastionInbound, AllowGatawayManagerInbound, AllowAzureLoadBalancerInbound, AllowBastionHostCommunication
+  public_subnet_nsg_rules = [
     {
       name    = "AllowBastionInbound"
       prio    = 100
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = local.is_private ? ["203.0.113.0/24"] : ["*"]
-      dst     = ["10.1.2.0/26"]
+      src     = ["*"]
+      # AzureBastionSubnetのCIDRを指定する
+      dst     = [var.bastion_subnet_cidr] # AzureBastionSubnetのCIDR
       dports  = ["3389", "22"]
-      comment = "Bastionの利用に必要な設定を追加"
+    },
+    {
+      name    = "AllowGatawayManagerInbound"
+      prio    = 110
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      src     = ["GatewayManager"]
+      dst     = ["*"]
+      dports  = ["443"]
+    },
+    {
+      name    = "AllowAzureLoadBalancerInbound"
+      prio    = 120
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      src     = ["AzureLoadBalancer"]
+      dst     = ["*"]
+      dports  = ["443"]
+    },
+    {
+      name    = "AllowBastionHostCommunication"
+      prio    = 130
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "*"
+      src     = ["VirtualNetwork"]
+      dst     = ["VirtualNetwork"]
+      dports  = ["8080", "5701"]
     }
-    # 必要なカスタムルールがあればここに追記
   ]
 
-  # Bastion用NSGルール
-  bastion_nsg_rules = [
+  # Public Bastion Subnet NSGルール（画像2）
+  public_bastion_nsg_rules = [
     {
-      name   = "AllowGatewayManagerInbound"
-      prio   = 100
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "GatewayManager"
-      dst    = "*"
-      dports = ["443"]
+      name    = "AllowHttpsInbound"
+      prio    = 100
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      src     = ["Internet"]
+      dst     = ["*"]
+      dports  = ["443"]
+    },
+    # Outbound（送信側）
+    {
+      name    = "AllowSshRdpOutbound"
+      prio    = 100
+      dir     = "Outbound"
+      acc     = "Allow"
+      proto   = "*"
+      src     = ["*"]
+      dst     = ["VirtualNetwork"]
+      dports  = ["22", "3389"]
     },
     {
-      name   = "AllowAzureLoadBalancerInbound"
-      prio   = 105
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "AzureLoadBalancer"
-      dst    = "*"
-      dports = ["443"]
+      name    = "AllowAzureCloudOutbound"
+      prio    = 110
+      dir     = "Outbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      src     = ["*"]
+      dst     = ["AzureCloud"]
+      dports  = ["443"]
     },
     {
-      name   = "AllowHttpsInbound"
-      prio   = 110
-      dir    = "Inbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = local.bastion_https_source
-      dst    = "*"
-      dports = ["443"]
+      name    = "AllowBastionCommunicatiou"
+      prio    = 120
+      dir     = "Outbound"
+      acc     = "Allow"
+      proto   = "*"
+      src     = ["VirtualNetwork"]
+      dst     = ["VirtualNetwork"]
+      dports  = ["8080", "5701"]
     },
     {
-      name   = "AllowSshRdpOutbound"
-      prio   = 200
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "*"
-      dst    = "VirtualNetwork"
-      dports = ["22","3389"]
-    },
-    {
-      name   = "AllowAzureCloudOutbound"
-      prio   = 210
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "Tcp"
-      src    = "*"
-      dst    = "AzureCloud"
-      dports = ["443"]
-    },
-    {
-      name   = "AllowBastionCommunicationOutbound"
-      prio   = 220
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "VirtualNetwork"
-      dst    = "VirtualNetwork"
-      dports = ["8080","5701"]
-    },
-    {
-      name   = "AllowHttpOutbound"
-      prio   = 230
-      dir    = "Outbound"
-      acc    = "Allow"
-      proto  = "*"
-      src    = "*"
-      dst    = "Internet"
-      dports = ["80"]
+      name    = "AllowHttpOutbound"
+      prio    = 130
+      dir     = "Outbound"
+      acc     = "Allow"
+      proto   = "*"
+      src     = ["*"]
+      dst     = ["Internet"]
+      dports  = ["80"]
     }
   ]
+
+  # Private Subnet NSGルール（画像3）
+  private_subnet_nsg_rules = [
+    {
+      name    = "AllowBastionInbound"
+      prio    = 100
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      # 九段会館のIPレンジを指定する
+      src     = [var.kudan_kaikan_ip_range] # 九段会館のIPレンジ
+      # AzureBastionSubnetのCIDRを指定する
+      dst     = [var.bastion_subnet_cidr]   # AzureBastionSubnetのCIDR
+      dports  = ["3389", "22"]
+    }
+  ]
+
+  # Private Bastion Subnet NSGルール（画像4）
+  private_bastion_nsg_rules = [
+    {
+      name    = "AllowHttpsInbound"
+      prio    = 100
+      dir     = "Inbound"
+      acc     = "Allow"
+      proto   = "Tcp"
+      # 九段会館のIPレンジを指定する
+      src     = [var.kudan_kaikan_ip_range] # 九段会館のIPレンジ
+      dst     = ["*"]
+      dports  = ["443"]
+    }
+  ]
+
+  # 動的にNSGルールを切り替え
+  subnet_nsg_rules = local.is_public ? local.public_subnet_nsg_rules : local.private_subnet_nsg_rules
+  bastion_nsg_rules = local.is_public ? local.public_bastion_nsg_rules : local.private_bastion_nsg_rules
 }
 
 # -----------------------------------------------------------
