@@ -106,7 +106,7 @@ locals {
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
   # -----------------------------------------------------------
-  # Subnet用NSGルール定義（public/privateで数・型を揃える）
+  # Subnet用NSGルール定義（public/private両方でsrc,dstを必ず配列型にする）
   # -----------------------------------------------------------
   subnet_nsg_rules = [
     // Inbound rules
@@ -127,7 +127,7 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = local.is_private ? ["GatewayManager"] : ["GatewayManager"]
+      src     = ["GatewayManager"]
       dst     = ["*"]
       dports  = ["443"]
       comment = "Bastionの利用に必要な設定を追加"
@@ -138,7 +138,7 @@ locals {
       dir     = "Inbound"
       acc     = "Allow"
       proto   = "Tcp"
-      src     = local.is_private ? ["AzureLoadBalancer"] : ["AzureLoadBalancer"]
+      src     = ["AzureLoadBalancer"]
       dst     = ["*"]
       dports  = ["443"]
       comment = "Bastionの利用に必要な設定を追加"
@@ -342,7 +342,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
       source_port_range          = "*"
       destination_port_ranges    = security_rule.value.dports
 
-      # 配列かどうかでprefix/prefixesを切り替え
+      # 1要素のみprefix、2要素以上はprefixesで渡す
       source_address_prefix      = length(security_rule.value.src) == 1 ? security_rule.value.src[0] : null
       source_address_prefixes    = length(security_rule.value.src) > 1 ? security_rule.value.src : null
       destination_address_prefix = length(security_rule.value.dst) == 1 ? security_rule.value.dst[0] : null
