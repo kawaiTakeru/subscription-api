@@ -27,7 +27,7 @@ create_subscription   = true
 #create_subscription   = false
 
 # SpokeサブスクリプションID（既存利用時に指定）
-spoke_subscription_id = "c27e0598-66c9-431b-89a5-05e51517b482"
+spoke_subscription_id = "c1c2d4fa-91b5-4fce-bff3-ec2a80b36e99"
 
 # Workload種別
 subscription_workload = "Production"
