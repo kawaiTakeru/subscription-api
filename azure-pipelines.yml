@@ -291,6 +291,12 @@ stages:
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
               TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
               TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+              # 承認者グループの displayName 配列（JSON文字列）。最低1つを指定推奨。
+              # 例: '["grp-pim-approvers"]'
+              # TF_VAR_pim_approver_group_names: '["<your-approver-group-display-name>"]'
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
