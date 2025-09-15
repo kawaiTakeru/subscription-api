@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.44"
     }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 2.50"
+    }
   }
 }
 
@@ -30,6 +34,12 @@ provider "azurerm" {
   alias           = "hub"
   subscription_id = var.hub_subscription_id
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
+}
+
+# AzureAD プロバイダ（承認者グループ解決に使用）
+provider "azuread" {
+  alias     = "spoke"
+  tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 locals {
@@ -297,7 +307,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -331,7 +341,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -340,6 +350,9 @@ locals {
       destination_address_prefix = "VirtualNetwork"
     }
   ]
+
+  # PIM 承認者グループ名（variables.tf から供給）
+  pim_approver_group_names = var.pim_approver_group_names
 }
 
 # -----------------------------------------------------------
@@ -670,6 +683,227 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
     azurerm_virtual_network.vnet,
     azurerm_virtual_network_peering.hub_to_spoke
   ]
+}
+
+# -----------------------------------------------------------
+# PIM設定（Owner / Contributor）
+# -----------------------------------------------------------
+
+# 承認者グループ情報を取得.
+data "azuread_group" "pim_approver_groups" {
+  for_each          = toset(local.pim_approver_group_names)
+  provider          = azuread.spoke
+  display_name      = each.value
+  security_enabled  = true
+}
+
+# 承認者情報を生成.
+locals {
+  pim_approvers = [
+    for group in data.azuread_group.pim_approver_groups :
+    {
+      type      = "Group"
+      object_id = group.object_id
+    }
+  ]
+}
+
+# サブスクリプション-所有者ロール.
+data "azurerm_role_definition" "pim_owner_role" {
+  provider = azurerm.spoke
+  name     = "Owner"
+  scope    = "/subscriptions/${var.spoke_subscription_id}"
+}
+
+# サブスクリプション-所有者ロール-PIM設定.
+resource "azurerm_role_management_policy" "pim_owner_role_rules" {
+  provider          = azurerm.spoke
+  scope             = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_id = data.azurerm_role_definition.pim_owner_role.id
+
+  activation_rules {
+    maximum_duration                                  = "PT2H"
+    require_multifactor_authentication                = false
+    required_conditional_access_authentication_context = null
+    require_justification                              = true
+    require_ticket_info                                = false
+    require_approval                                   = true
+
+    approval_stage {
+      dynamic "primary_approver" {
+        for_each = local.pim_approvers
+        content {
+          type      = primary_approver.value.type
+          object_id = primary_approver.value.object_id
+        }
+      }
+    }
+  }
+
+  eligible_assignment_rules {
+    expiration_required = false
+    expire_after        = "P15D"
+  }
+
+  active_assignment_rules {
+    expiration_required                  = true
+    expire_after                          = "P15D"
+    require_multifactor_authentication    = true
+    require_justification                 = true
+  }
+
+  notification_rules {
+    eligible_assignments {
+      admin_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+    active_assignments {
+      admin_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+    eligible_activations {
+      admin_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+  }
+}
+
+# サブスクリプション-共同作成者ロール.
+data "azurerm_role_definition" "pim_contributor_role" {
+  provider = azurerm.spoke
+  name     = "Contributor"
+  scope    = "/subscriptions/${var.spoke_subscription_id}"
+}
+
+# サブスクリプション-共同作成者ロール-PIM設定.
+resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
+  provider           = azurerm.spoke
+  scope              = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_id = data.azurerm_role_definition.pim_contributor_role.id
+
+  activation_rules {
+    maximum_duration                                  = "PT8H"
+    require_multifactor_authentication                = false
+    required_conditional_access_authentication_context = null
+    require_justification                              = true
+    require_ticket_info                                = false
+    require_approval                                   = true
+
+    approval_stage {
+      dynamic "primary_approver" {
+        for_each = local.pim_approvers
+        content {
+          type      = primary_approver.value.type
+          object_id = primary_approver.value.object_id
+        }
+      }
+    }
+  }
+
+  eligible_assignment_rules {
+    expiration_required = false
+    expire_after        = "P15D"
+  }
+
+  active_assignment_rules {
+    expiration_required                  = true
+    expire_after                          = "P15D"
+    require_multifactor_authentication    = true
+    require_justification                 = true
+  }
+
+  notification_rules {
+    eligible_assignments {
+      admin_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+    active_assignments {
+      admin_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+    eligible_activations {
+      admin_notifications {
+        default_recipients   = false
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      assignee_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+      approver_notifications {
+        default_recipients   = true
+        additional_recipients = []
+        notification_level   = "All"
+      }
+    }
+  }
 }
 
 # ★ created_subscription_id：既存なら var を、作成なら data/resource を jsondecode して GUID を返す
