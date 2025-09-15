@@ -214,3 +214,12 @@ variable "allowed_port" {
   type        = number
   default     = 3389
 }
+
+# -----------------------------------------------------------
+# PIM 承認者グループ名（displayNameの配列）
+# -----------------------------------------------------------
+variable "pim_approver_group_names" {
+  description = "PIM 承認者に設定する Azure AD グループの displayName 一覧"
+  type        = list(string)
+  default     = []
+}
