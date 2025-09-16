@@ -36,7 +36,7 @@ provider "azurerm" {
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
-# AzureAD プロバイダ（承認者グループ解決に使用）
+# AzureAD プロバイダ（承認者グループ解決・ユーザー解決に使用）
 provider "azuread" {
   alias     = "spoke"
   tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
@@ -308,7 +308,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -702,17 +702,19 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 # -----------------------------------------------------------
-# Subscription Owner 付与（メール→ユーザー解決→ロール割当）
+# サブスクリプション Owner 付与（メール→ユーザー解決→ロール割当）
 # -----------------------------------------------------------
 
 # メール（UPN）から AAD ユーザー解決（見つからなければエラー）
 data "azuread_user" "subscription_owners" {
-  for_each             = toset(var.subscription_owner_emails)
-  user_principal_name  = each.value
+  provider            = azuread.spoke
+  for_each            = toset(var.subscription_owner_emails)
+  user_principal_name = each.value
 }
 
 # サブスクリプションの Owner ロールを付与
 resource "azurerm_role_assignment" "subscription_owner" {
+  provider             = azurerm.spoke
   for_each             = data.azuread_user.subscription_owners
   scope                = "/subscriptions/${var.spoke_subscription_id}"
   role_definition_name = "Owner"
@@ -740,7 +742,7 @@ data "azuread_group" "pim_contributor_approver_groups" {
 
 # 承認者の objectId 一覧（既存のみを採用）
 locals {
-  owner_approver_group_object_ids = [for g in data.azuread_group.pim_owner_approver_groups : g.object_id]
+  owner_approver_group_object_ids       = [for g in data.azuread_group.pim_owner_approver_groups : g.object_id]
   contributor_approver_group_object_ids = [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id]
 
   pim_owner_approvers       = [for id in local.owner_approver_group_object_ids       : { type = "Group", object_id = id }]
@@ -976,5 +978,4 @@ output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub
 output "spoke_to_hub_peering_id"   { value = azurerm_virtual_network_peering.spoke_to_hub.id }
 output "bastion_host_id"           { value = azurerm_bastion_host.bastion.id }
 output "bastion_public_ip"         { value = azurerm_public_ip.bastion_pip.ip_address }
-output "natgw_id"                  { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
-output "natgw_public_ip"           { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
+output "natgw_id"                  { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id
