@@ -216,6 +216,15 @@ variable "allowed_port" {
 }
 
 # -----------------------------------------------------------
+# サブスクリプションの所有者に付与するユーザーのメール（UPN）一覧
+# -----------------------------------------------------------
+variable "subscription_owner_emails" {
+  description = "Subscription Owner に付与するユーザーのメール（UPN）一覧（例: [\"alice@example.com\"]）"
+  type        = list(string)
+  default     = []
+}
+
+# -----------------------------------------------------------
 # PIM 承認者グループ（既存グループの displayName を指定）
 # -----------------------------------------------------------
 variable "pim_owner_approver_group_names" {
