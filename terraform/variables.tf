@@ -185,7 +185,7 @@ variable "bastion_subnet_number_of_ips" {
 }
 
 # -----------------------------------------------------------
-# VNet種別（public/private）: Bastion NSG命名やルール切替に利用
+# VNet種別（public/private）
 # -----------------------------------------------------------
 variable "vnet_type" {
   description = "VNet種別（public/private）"
@@ -216,7 +216,7 @@ variable "allowed_port" {
 }
 
 # -----------------------------------------------------------
-# サブスクリプションの所有者に付与するユーザーのメール（UPN）一覧
+# サブスクリプションの所有者に付与するユーザー（メール/UPN一覧）
 # -----------------------------------------------------------
 variable "subscription_owner_emails" {
   description = "Subscription Owner に付与するユーザーのメール（UPN）一覧（例: [\"alice@example.com\"]）"
