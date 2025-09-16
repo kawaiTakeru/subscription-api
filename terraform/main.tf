@@ -78,13 +78,14 @@ locals {
   name_bastion_nsg         = local.project_slug != "" ? "nsg-${local.project_slug}-${lower(var.vnet_type)}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_host        = local.project_slug != "" ? "bastion-${local.project_slug}-${lower(var.vnet_type)}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   name_bastion_public_ip   = local.project_slug != "" ? "pip-${local.project_slug}-bastion-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw     = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_pip = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_route_table = local.base != "" ? "rt-${local.base}" : null
-  name_udr_default = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
-  name_udr_kms1    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
-  name_udr_kms2    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
-  name_udr_kms3    = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
+  name_natgw               = local.project_slug != "" ? "ng-${local.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_pip           = local.project_slug != "" ? "ng-${local.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_prefix        = local.project_slug != "" ? "ng-${local.project_slug}-prefix-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_route_table         = local.base != "" ? "rt-${local.base}" : null
+  name_udr_default         = local.project_slug != "" ? "udr-${local.project_slug}-er-${var.environment_id}-${var.region_code}-001" : null
+  name_udr_kms1            = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-001" : null
+  name_udr_kms2            = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-002" : null
+  name_udr_kms3            = local.project_slug != "" ? "udr-${local.project_slug}-kmslicense-${var.environment_id}-${var.region_code}-003" : null
 
   billing_scope = (
     var.billing_account_name != "" &&
@@ -307,7 +308,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -351,8 +352,13 @@ locals {
     }
   ]
 
-  # PIM 承認者グループ名（variables.tf から供給）
-  pim_approver_group_names = var.pim_approver_group_names
+  # === PIM 承認者グループ命名（要求ルール） ===
+  # grp-<PJ/案件名>-<pim-owner-approver|pim-contributor-approver>-<環境>-<リージョン略号>-<識別番号>
+  default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
+  owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
+  contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
 
 # -----------------------------------------------------------
@@ -568,6 +574,17 @@ resource "azurerm_public_ip" "natgw_pip" {
   ip_version        = "IPv4"
 }
 
+resource "azurerm_public_ip_prefix" "natgw_prefix" {
+  count               = local.is_public ? 1 : 0
+  provider            = azurerm.spoke
+  name                = local.name_natgw_prefix
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  prefix_length = 30
+  sku           = "Standard"
+}
+
 resource "azurerm_nat_gateway" "natgw" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
@@ -584,6 +601,13 @@ resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
   provider             = azurerm.spoke
   nat_gateway_id       = azurerm_nat_gateway.natgw[0].id
   public_ip_address_id = azurerm_public_ip.natgw_pip[0].id
+}
+
+resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
+  count             = local.is_public ? 1 : 0
+  provider          = azurerm.spoke
+  nat_gateway_id    = azurerm_nat_gateway.natgw[0].id
+  public_ip_prefix_id = azurerm_public_ip_prefix.natgw_prefix[0].id
 }
 
 resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
@@ -689,148 +713,69 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 # PIM設定（Owner / Contributor）
 # -----------------------------------------------------------
 
-# 承認者グループ情報を取得.
-data "azuread_group" "pim_approver_groups" {
-  for_each          = toset(local.pim_approver_group_names)
-  provider          = azuread.spoke
-  display_name      = each.value
-  security_enabled  = true
+# 承認者グループ（displayName）を役割別に解決
+data "azuread_group" "pim_owner_approver_groups" {
+  for_each         = toset(local.owner_approver_group_names)
+  provider         = azuread.spoke
+  display_name     = each.value
+  security_enabled = true
 }
 
-# 承認者情報を生成.
+data "azuread_group" "pim_contributor_approver_groups" {
+  for_each         = toset(local.contributor_approver_group_names)
+  provider         = azuread.spoke
+  display_name     = each.value
+  security_enabled = true
+}
+
+# 承認者リスト（オブジェクトID配列）
 locals {
-  pim_approvers = [
-    for group in data.azuread_group.pim_approver_groups :
+  pim_owner_approvers = [
+    for g in data.azuread_group.pim_owner_approver_groups :
     {
       type      = "Group"
-      object_id = group.object_id
+      object_id = g.object_id
+    }
+  ]
+  pim_contributor_approvers = [
+    for g in data.azuread_group.pim_contributor_approver_groups :
+    {
+      type      = "Group"
+      object_id = g.object_id
     }
   ]
 }
 
-# サブスクリプション-所有者ロール.
+# ロール定義
 data "azurerm_role_definition" "pim_owner_role" {
   provider = azurerm.spoke
   name     = "Owner"
   scope    = "/subscriptions/${var.spoke_subscription_id}"
 }
 
-# サブスクリプション-所有者ロール-PIM設定.
-resource "azurerm_role_management_policy" "pim_owner_role_rules" {
-  provider          = azurerm.spoke
-  scope             = "/subscriptions/${var.spoke_subscription_id}"
-  role_definition_id = data.azurerm_role_definition.pim_owner_role.id
-
-  activation_rules {
-    maximum_duration                                  = "PT2H"
-    require_multifactor_authentication                = false
-    required_conditional_access_authentication_context = null
-    require_justification                              = true
-    require_ticket_info                                = false
-    require_approval                                   = true
-
-    approval_stage {
-      dynamic "primary_approver" {
-        for_each = local.pim_approvers
-        content {
-          type      = primary_approver.value.type
-          object_id = primary_approver.value.object_id
-        }
-      }
-    }
-  }
-
-  eligible_assignment_rules {
-    expiration_required = false
-    expire_after        = "P15D"
-  }
-
-  active_assignment_rules {
-    expiration_required                  = true
-    expire_after                          = "P15D"
-    require_multifactor_authentication    = true
-    require_justification                 = true
-  }
-
-  notification_rules {
-    eligible_assignments {
-      admin_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      assignee_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      approver_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-    }
-    active_assignments {
-      admin_notifications {
-        default_recipients   = true
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      assignee_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      approver_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-    }
-    eligible_activations {
-      admin_notifications {
-        default_recipients   = false
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      assignee_notifications {
-        default_recipients   = true
-        additional_recipients = []
-        notification_level   = "All"
-      }
-      approver_notifications {
-        default_recipients   = true
-        additional_recipients = []
-        notification_level   = "All"
-      }
-    }
-  }
-}
-
-# サブスクリプション-共同作成者ロール.
 data "azurerm_role_definition" "pim_contributor_role" {
   provider = azurerm.spoke
   name     = "Contributor"
   scope    = "/subscriptions/${var.spoke_subscription_id}"
 }
 
-# サブスクリプション-共同作成者ロール-PIM設定.
-resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
+# 所有者ロールの PIM ルール
+resource "azurerm_role_management_policy" "pim_owner_role_rules" {
   provider           = azurerm.spoke
   scope              = "/subscriptions/${var.spoke_subscription_id}"
-  role_definition_id = data.azurerm_role_definition.pim_contributor_role.id
+  role_definition_id = data.azurerm_role_definition.pim_owner_role.id
 
   activation_rules {
-    maximum_duration                                  = "PT8H"
-    require_multifactor_authentication                = false
+    maximum_duration                                   = "PT2H"
+    require_multifactor_authentication                 = false
     required_conditional_access_authentication_context = null
-    require_justification                              = true
-    require_ticket_info                                = false
-    require_approval                                   = true
+    require_justification                               = true
+    require_ticket_info                                 = false
+    require_approval                                    = true
 
     approval_stage {
       dynamic "primary_approver" {
-        for_each = local.pim_approvers
+        for_each = local.pim_owner_approvers
         content {
           type      = primary_approver.value.type
           object_id = primary_approver.value.object_id
@@ -845,62 +790,154 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
   }
 
   active_assignment_rules {
-    expiration_required                  = true
-    expire_after                          = "P15D"
-    require_multifactor_authentication    = true
-    require_justification                 = true
+    expiration_required               = true
+    expire_after                      = "P15D"
+    require_multifactor_authentication = true
+    require_justification              = true
   }
 
   notification_rules {
     eligible_assignments {
       admin_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       assignee_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       approver_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
     }
     active_assignments {
       admin_notifications {
-        default_recipients   = true
+        default_recipients    = true
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       assignee_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       approver_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
     }
     eligible_activations {
       admin_notifications {
-        default_recipients   = false
+        default_recipients    = false
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       assignee_notifications {
-        default_recipients   = true
+        default_recipients    = true
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
       }
       approver_notifications {
-        default_recipients   = true
+        default_recipients    = true
         additional_recipients = []
-        notification_level   = "All"
+        notification_level    = "All"
+      }
+    }
+  }
+}
+
+# 共同作成者ロールの PIM ルール
+resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
+  provider           = azurerm.spoke
+  scope              = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_id = data.azurerm_role_definition.pim_contributor_role.id
+
+  activation_rules {
+    maximum_duration                                   = "PT8H"
+    require_multifactor_authentication                 = false
+    required_conditional_access_authentication_context = null
+    require_justification                               = true
+    require_ticket_info                                 = false
+    require_approval                                    = true
+
+    approval_stage {
+      dynamic "primary_approver" {
+        for_each = local.pim_contributor_approvers
+        content {
+          type      = primary_approver.value.type
+          object_id = primary_approver.value.object_id
+        }
+      }
+    }
+  }
+
+  eligible_assignment_rules {
+    expiration_required = false
+    expire_after        = "P15D"
+  }
+
+  active_assignment_rules {
+    expiration_required               = true
+    expire_after                      = "P15D"
+    require_multifactor_authentication = true
+    require_justification              = true
+  }
+
+  notification_rules {
+    eligible_assignments {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    active_assignments {
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
+    eligible_activations {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
       }
     }
   }
