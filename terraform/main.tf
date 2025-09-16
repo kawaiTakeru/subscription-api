@@ -715,10 +715,11 @@ data "azuread_user" "subscription_owners" {
 # サブスクリプションの Owner ロールを付与
 resource "azurerm_role_assignment" "subscription_owner" {
   provider             = azurerm.spoke
-  for_each             = data.azuread_user.subscription_owners
+  # Plan 時に確定するキー集合（UPN）を使用
+  for_each             = { for upn in var.subscription_owner_emails : upn => upn }
   scope                = "/subscriptions/${var.spoke_subscription_id}"
   role_definition_name = "Owner"
-  principal_id         = each.value.object_id
+  principal_id         = data.azuread_user.subscription_owners[each.key].object_id
 }
 
 # -----------------------------------------------------------
