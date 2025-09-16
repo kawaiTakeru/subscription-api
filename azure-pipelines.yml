@@ -281,11 +281,10 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 自動作成を有効化（既存グループを使う場合は false にし、下の名前指定を使う）
-              TF_VAR_pim_auto_create_approver_groups: true
-              # 既存グループ displayName を使う場合の例（必要時のみ有効化）
-              # TF_VAR_pim_owner_approver_group_names: '["grp-<proj>-pim-owner-approver-<env>-<region>-<seq>"]'
-              # TF_VAR_pim_contributor_approver_group_names: '["grp-<proj>-pim-contributor-approver-<env>-<region>-<seq>"]'
+              # 既存グループを使用（自動作成は無効化）
+              TF_VAR_pim_auto_create_approver_groups: false
+              TF_VAR_pim_owner_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
+              TF_VAR_pim_contributor_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
@@ -299,19 +298,13 @@ stages:
                 try {
                   terraform init -no-color -input=false
 
-                  # 1) 承認者グループの作成（必要時のみ）
-                  terraform apply -no-color -input=false -auto-approve `
-                    -target azuread_group.pim_owner_approver `
-                    -target azuread_group.pim_contributor_approver
-                  if ($LASTEXITCODE -ne 0) { throw "Approver group creation failed" }
-
-                  # 2) ロール定義読み込みを先に適用
+                  # 1) ロール定義読み込み
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azurerm_role_definition.pim_owner_role `
                     -target data.azurerm_role_definition.pim_contributor_role
                   if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
 
-                  # 3) PIM ポリシー適用
+                  # 2) PIM ポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
