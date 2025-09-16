@@ -352,14 +352,7 @@ locals {
     }
   ]
 
-  # === PIM 承認者グループ命名（既定名） ===
-  # grp-<PJ/案件名>-<pim-owner-approver|pim-contributor-approver>-<環境>-<リージョン略号>-<識別番号>
-  default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
-  # displayName 指定があればそれを優先。無ければ既定名を1件使う。
-  owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
-  contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
 
 # -----------------------------------------------------------
@@ -714,50 +707,36 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 # PIM設定（Owner / Contributor）
 # -----------------------------------------------------------
 
-# 既存グループ名が渡された場合の解決（displayName）
-data "azuread_group" "pim_owner_approver_groups" {
-  for_each         = length(var.pim_owner_approver_group_names) > 0 ? toset(var.pim_owner_approver_group_names) : []
+# Three hardcoded data sources for existing Entra ID groups
+data "azuread_group" "pim_manager_approver" {
   provider         = azuread.spoke
-  display_name     = each.value
+  display_name     = "ot-oprt-is-manager"
   security_enabled = true
 }
 
-data "azuread_group" "pim_contributor_approver_groups" {
-  for_each         = length(var.pim_contributor_approver_group_names) > 0 ? toset(var.pim_contributor_approver_group_names) : []
+data "azuread_group" "pim_general_approver" {
   provider         = azuread.spoke
-  display_name     = each.value
+  display_name     = "ot-oprt-is-general"
   security_enabled = true
 }
 
-# 必要に応じた承認者グループの自動作成（既存名が未指定かつフラグがtrue）
-resource "azuread_group" "pim_owner_approver" {
-  count            = var.pim_auto_create_approver_groups && length(var.pim_owner_approver_group_names) == 0 ? 1 : 0
+data "azuread_group" "pim_director_approver" {
   provider         = azuread.spoke
-  display_name     = local.default_owner_approver_group_name
+  display_name     = "ot-oprt-is-director"
   security_enabled = true
-  mail_enabled     = false
-  description      = "PIM approver group for Owner role (${local.default_owner_approver_group_name})"
 }
 
-resource "azuread_group" "pim_contributor_approver" {
-  count            = var.pim_auto_create_approver_groups && length(var.pim_contributor_approver_group_names) == 0 ? 1 : 0
-  provider         = azuread.spoke
-  display_name     = local.default_contributor_approver_group_name
-  security_enabled = true
-  mail_enabled     = false
-  description      = "PIM approver group for Contributor role (${local.default_contributor_approver_group_name})"
-}
-
-# 承認者の objectId 一覧（既存＋自動作成をマージ）
+# 承認者の objectId 一覧（三つの既存グループを使用）
 locals {
-  owner_approver_group_object_ids = concat(
-    length(var.pim_owner_approver_group_names) > 0 ? [for g in data.azuread_group.pim_owner_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_owner_approver) > 0 ? [azuread_group.pim_owner_approver[0].object_id] : []
-  )
-  contributor_approver_group_object_ids = concat(
-    length(var.pim_contributor_approver_group_names) > 0 ? [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
-  )
+  # Both Owner and Contributor use the same three groups
+  approver_group_object_ids = [
+    data.azuread_group.pim_manager_approver.object_id,
+    data.azuread_group.pim_general_approver.object_id,
+    data.azuread_group.pim_director_approver.object_id
+  ]
+
+  owner_approver_group_object_ids       = local.approver_group_object_ids
+  contributor_approver_group_object_ids = local.approver_group_object_ids
 
   pim_owner_approvers       = [for id in local.owner_approver_group_object_ids        : { type = "Group", object_id = id }]
   pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids  : { type = "Group", object_id = id }]
