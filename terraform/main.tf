@@ -286,7 +286,7 @@ locals {
     {
       name                       = "AllowGatewayManager"
       priority                   = 110
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -297,7 +297,7 @@ locals {
     {
       name                       = "AllowAzureLoadBalancer"
       priority                   = 120
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -308,7 +308,7 @@ locals {
     {
       name                       = "AllowBastionHostCommunications"
       priority                   = 130
-      direction                   = "Inbound"
+      direction                  = "Inbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -351,15 +351,6 @@ locals {
       destination_address_prefix = "VirtualNetwork"
     }
   ]
-
-  # === PIM 承認者グループ命名（既定名） ===
-  # grp-<PJ/案件名>-<pim-owner-approver|pim-contributor-approver>-<環境>-<リージョン略号>-<識別番号>
-  default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
-  # displayName 指定があればそれを優先。無ければ既定名を1件使う。
-  owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
-  contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
 
 # -----------------------------------------------------------
@@ -421,7 +412,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 # -----------------------------------------------------------
-# NSG（業務用/サブネット用）
+# NSG（業務用/サブネット用）- 1回だけ定義
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
@@ -451,7 +442,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
 }
 
 # -----------------------------------------------------------
-# Bastion用NSG
+# Bastion用NSG - 1回だけ定義
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
@@ -731,12 +722,8 @@ data "azuread_group" "pim_contributor_approver_groups" {
 
 # 承認者の objectId 一覧（既存のみを採用）
 locals {
-  owner_approver_group_object_ids = [
-    for g in data.azuread_group.pim_owner_approver_groups : g.object_id
-  ]
-  contributor_approver_group_object_ids = [
-    for g in data.azuread_group.pim_contributor_approver_groups : g.object_id
-  ]
+  owner_approver_group_object_ids = [for g in data.azuread_group.pim_owner_approver_groups : g.object_id]
+  contributor_approver_group_object_ids = [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id]
 
   pim_owner_approvers       = [for id in local.owner_approver_group_object_ids       : { type = "Group", object_id = id }]
   pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
