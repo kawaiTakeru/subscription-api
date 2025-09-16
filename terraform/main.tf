@@ -286,7 +286,7 @@ locals {
     {
       name                       = "AllowGatewayManager"
       priority                   = 110
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -297,7 +297,7 @@ locals {
     {
       name                       = "AllowAzureLoadBalancer"
       priority                   = 120
-      direction                  = "Inbound"
+      direction                   = "Inbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -421,7 +421,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 # -----------------------------------------------------------
-# NSG（業務用/サブネット用）- 1回だけ定義
+# NSG（業務用/サブネット用）
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
@@ -451,7 +451,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
 }
 
 # -----------------------------------------------------------
-# Bastion用NSG - 1回だけ定義
+# Bastion用NSG
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
@@ -729,38 +729,17 @@ data "azuread_group" "pim_contributor_approver_groups" {
   security_enabled = true
 }
 
-# 必要に応じた承認者グループの自動作成（既存名が未指定かつフラグがtrue）
-resource "azuread_group" "pim_owner_approver" {
-  count            = var.pim_auto_create_approver_groups && length(var.pim_owner_approver_group_names) == 0 ? 1 : 0
-  provider         = azuread.spoke
-  display_name     = local.default_owner_approver_group_name
-  security_enabled = true
-  mail_enabled     = false
-  description      = "PIM approver group for Owner role (${local.default_owner_approver_group_name})"
-}
-
-resource "azuread_group" "pim_contributor_approver" {
-  count            = var.pim_auto_create_approver_groups && length(var.pim_contributor_approver_group_names) == 0 ? 1 : 0
-  provider         = azuread.spoke
-  display_name     = local.default_contributor_approver_group_name
-  security_enabled = true
-  mail_enabled     = false
-  description      = "PIM approver group for Contributor role (${local.default_contributor_approver_group_name})"
-}
-
-# 承認者の objectId 一覧（既存＋自動作成をマージ）
+# 承認者の objectId 一覧（既存のみを採用）
 locals {
-  owner_approver_group_object_ids = concat(
-    length(var.pim_owner_approver_group_names) > 0 ? [for g in data.azuread_group.pim_owner_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_owner_approver) > 0 ? [azuread_group.pim_owner_approver[0].object_id] : []
-  )
-  contributor_approver_group_object_ids = concat(
-    length(var.pim_contributor_approver_group_names) > 0 ? [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
-  )
+  owner_approver_group_object_ids = [
+    for g in data.azuread_group.pim_owner_approver_groups : g.object_id
+  ]
+  contributor_approver_group_object_ids = [
+    for g in data.azuread_group.pim_contributor_approver_groups : g.object_id
+  ]
 
-  pim_owner_approvers       = [for id in local.owner_approver_group_object_ids        : { type = "Group", object_id = id }]
-  pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids  : { type = "Group", object_id = id }]
+  pim_owner_approvers       = [for id in local.owner_approver_group_object_ids       : { type = "Group", object_id = id }]
+  pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
 }
 
 # ロール定義
