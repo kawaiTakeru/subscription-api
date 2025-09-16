@@ -36,7 +36,7 @@ provider "azurerm" {
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
-# AzureAD プロバイダ（メール→ユーザー解決、PIM 承認者解決に使用）
+# AzureAD プロバイダ（メール→ユーザー解決、PIM 承認者解決、グループ作成に使用）
 provider "azuread" {
   alias     = "spoke"
   tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
@@ -108,6 +108,11 @@ locals {
 
   # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
+
+  # --- 管理用グループ名（サブスクリプション毎に3グループ作成） ---
+  group_name_admin     = local.base != "" ? "azure-${local.project_slug}-${local.purpose_slug}-${var.environment_id}-group-admin"     : null
+  group_name_developer = local.base != "" ? "azure-${local.project_slug}-${local.purpose_slug}-${var.environment_id}-group-developer" : null
+  group_name_operator  = local.base != "" ? "azure-${local.project_slug}-${local.purpose_slug}-${var.environment_id}-group-operator"  : null
 
   # --- Public Subnet NSGルール ---
   public_subnet_nsg_rules = [
@@ -320,7 +325,7 @@ locals {
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -331,7 +336,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -342,7 +347,7 @@ locals {
     {
       name                       = "AllowBastionCommunication"
       priority                   = 120
-      direction                  = "Outbound"
+      direction                   = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -385,6 +390,49 @@ data "azapi_resource" "subscription_get" {
   parent_id = "/"
   response_export_values = ["properties.subscriptionId"]
   depends_on = [azapi_resource.subscription]
+}
+
+# -----------------------------------------------------------
+# 管理用グループ作成（サブスクリプション毎に3グループ）
+# -----------------------------------------------------------
+resource "azuread_group" "group_admin" {
+  provider         = azuread.spoke
+  display_name     = local.group_name_admin
+  description      = "Subscription admin group (Owner)."
+  security_enabled = true
+  mail_enabled     = false
+}
+
+resource "azuread_group" "group_developer" {
+  provider         = azuread.spoke
+  display_name     = local.group_name_developer
+  description      = "Subscription developer group (Contributor)."
+  security_enabled = true
+  mail_enabled     = false
+}
+
+resource "azuread_group" "group_operator" {
+  provider         = azuread.spoke
+  display_name     = local.group_name_operator
+  description      = "Subscription operator group (Reader)."
+  security_enabled = true
+  mail_enabled     = false
+}
+
+# -----------------------------------------------------------
+# メール（UPN）から AAD ユーザー解決 → 所有者グループ（admin）にメンバー追加
+# -----------------------------------------------------------
+data "azuread_user" "subscription_owners" {
+  provider            = azuread.spoke
+  for_each            = toset(var.subscription_owner_emails)
+  user_principal_name = each.value
+}
+
+resource "azuread_group_member" "owner_group_members" {
+  provider         = azuread.spoke
+  for_each         = { for upn in var.subscription_owner_emails : upn => upn }
+  group_object_id  = azuread_group.group_admin.id
+  member_object_id = data.azuread_user.subscription_owners[each.key].object_id
 }
 
 # -----------------------------------------------------------
@@ -702,27 +750,6 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 # -----------------------------------------------------------
-# サブスクリプション Owner 付与（メール→ユーザー解決→ロール割当）
-# -----------------------------------------------------------
-
-# メール（UPN）から AAD ユーザー解決（見つからなければエラー）
-data "azuread_user" "subscription_owners" {
-  provider            = azuread.spoke
-  for_each            = toset(var.subscription_owner_emails)
-  user_principal_name = each.value
-}
-
-# サブスクリプションの Owner ロールを付与
-resource "azurerm_role_assignment" "subscription_owner" {
-  provider             = azurerm.spoke
-  # Plan 時に確定するキー集合（UPN）を使用
-  for_each             = { for upn in var.subscription_owner_emails : upn => upn }
-  scope                = "/subscriptions/${var.spoke_subscription_id}"
-  role_definition_name = "Owner"
-  principal_id         = data.azuread_user.subscription_owners[each.key].object_id
-}
-
-# -----------------------------------------------------------
 # PIM設定（Owner / Contributor）- 既存グループのみ使用
 # -----------------------------------------------------------
 
@@ -836,23 +863,7 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
       }
     }
 
-    eligible_activations {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-    }
+  [...]
   }
 }
 
@@ -930,23 +941,7 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
       }
     }
 
-    eligible_activations {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-    }
+  [...]
   }
 }
 
