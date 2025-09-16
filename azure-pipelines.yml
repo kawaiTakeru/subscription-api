@@ -20,6 +20,13 @@ parameters:
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
+  # 既存PIM承認者グループの displayName（JSON配列で渡す）
+  - name: pim_owner_groups
+    type: string
+    default: '[]'
+  - name: pim_contributor_groups
+    type: string
+    default: '[]'
 
 trigger: none
 pr: none
@@ -46,13 +53,11 @@ stages:
         steps:
           - checkout: self
 
-          # Terraformインストール
           - task: TerraformInstaller@1
             displayName: Install Terraform 1.7.5
             inputs:
               terraformVersion: 1.7.5
 
-          # Step0: サブスクリプション作成または再利用
           - task: AzureCLI@2
             name: step0
             displayName: Step0 - Subscription (create or reuse)
@@ -136,9 +141,8 @@ stages:
                   return $null
                 }
 
-                # ===== 変数取得 =====
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
-                $hubSubId  = Get-TfVar $tfvars "hub_subscription_id"
+                $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
                 if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
 
                 $createSub = Get-TfVar $tfvars "create_subscription"
@@ -148,31 +152,24 @@ stages:
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
-
-                    # 1) alias リソースのみ作成
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
-
-                    # 2) data 読み出し
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
-                    # 3) 生成 ID の取得（output → REST フォールバック）
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
                       try {
                         $raw = terraform output -raw created_subscription_id 2>$null
-                        if ($raw -and ($raw -match '^[0-9a-fA-F-]{36}$')) { $createdSubId = $raw }
+                        if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
                       if (-not $createdSubId) { $createdSubId = Try-GetSubIdViaAliasIdFromState }
                       if (-not $createdSubId -and $aliasName) { $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName }
                       if (-not $createdSubId) { Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10 }
                     }
-
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 新規サブスク認識待機
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -185,14 +182,12 @@ stages:
                   } finally { Pop-Location }
                 } elseif ($createSub -eq "false") {
                   if (-not $finalSubId) { throw "spoke_subscription_id missing for existing subscription use." }
-                  if (-not ($finalSubId -match '^[0-9a-fA-F-]{36}$')) { throw "spoke_subscription_id must be a GUID. Actual: $finalSubId" }
+                  if (-not (Is-Guid $finalSubId)) { throw "spoke_subscription_id must be a GUID. Actual: $finalSubId" }
                   Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
                 } else { throw "create_subscription must be true or false in tfvars." }
 
-                # Hub側のサブスクリプションIDも出力
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-          # Step1: リソースグループ作成
           - task: AzureCLI@2
             displayName: Step1 - Resource Group
             env:
@@ -213,8 +208,7 @@ stages:
                 $ErrorActionPreference='Stop'
                 az account list --refresh 1>$null
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
-
-                function Get-TfVar {[CmdletBinding()]param([string]$Path,[string]$Key)
+                function Get-TfVar { param([string]$Path,[string]$Key)
                   if (-not (Test-Path $Path)) { return "" }
                   $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
                   if (-not $line) { return "" }
@@ -253,7 +247,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
                 } finally { Pop-Location }
 
-          # Step1.25: 指定メールアドレスをサブスクリプションのOwnerに付与
           - task: AzureCLI@2
             displayName: Step1.25 - Assign Owner to subscription (emails)
             condition: and(succeeded(), ne('${{ parameters.email }}',''))
@@ -265,7 +258,6 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # JSON配列で渡してください（例: ["alice@example.com"]）
               TF_VAR_subscription_owner_emails: ${{ parameters.email }}
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
@@ -276,8 +268,6 @@ stages:
               inlineScript: |
                 $ErrorActionPreference='Stop'
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
-
-                # 受信値が単一文字列だった場合に JSON 配列へ補正（["x@contoso.com"] 形式）
                 $raw = '${{ parameters.email }}'
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
@@ -289,23 +279,15 @@ stages:
                     $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
                   }
                 }
-
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-
-                  # ユーザー解決（見つからない場合は data.azuread_user がエラーで停止）
-                  terraform apply -no-color -input=false -auto-approve `
-                    -target data.azuread_user.subscription_owners
+                  terraform apply -no-color -input=false -auto-approve -target data.azuread_user.subscription_owners
                   if ($LASTEXITCODE -ne 0) { throw "Resolve users failed (check emails and Graph permissions)." }
-
-                  # Owner ロール付与
-                  terraform apply -no-color -input=false -auto-approve `
-                    -target azurerm_role_assignment.subscription_owner
+                  terraform apply -no-color -input=false -auto-approve -target azurerm_role_assignment.subscription_owner
                   if ($LASTEXITCODE -ne 0) { throw "Assign Owner role failed" }
                 } finally { Pop-Location }
 
-          # Step1.5: PIM（Owner/Contributorのロール管理ポリシー）- 既存グループのみ
           - task: AzureCLI@2
             displayName: Step1.5 - PIM (Owner/Contributor policies)
             env:
@@ -316,9 +298,8 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 既存グループ displayName（例）
-              TF_VAR_pim_owner_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
-              TF_VAR_pim_contributor_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
+              TF_VAR_pim_owner_approver_group_names: ${{ parameters.pim_owner_groups }}
+              TF_VAR_pim_contributor_approver_group_names: ${{ parameters.pim_contributor_groups }}
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
@@ -331,21 +312,16 @@ stages:
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-
-                  # 1) ロール定義読み込み
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azurerm_role_definition.pim_owner_role `
                     -target data.azurerm_role_definition.pim_contributor_role
                   if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
-
-                  # 2) PIM ポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
                   if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
                 } finally { Pop-Location }
 
-          # Step2: VNet作成
           - task: AzureCLI@2
             displayName: Step2 - VNet
             env:
@@ -372,7 +348,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
                 } finally { Pop-Location }
 
-          # Step3a: サブネット作成
           - task: AzureCLI@2
             displayName: Step3a - Subnet
             env:
@@ -401,7 +376,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Subnet apply failed" }
                 } finally { Pop-Location }
 
-          # Step3b: NSG作成
           - task: AzureCLI@2
             displayName: Step3b - NSG
             env:
@@ -430,7 +404,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "NSG apply failed" }
                 } finally { Pop-Location }
 
-          # Step3c: NSGアタッチ
           - task: AzureCLI@2
             displayName: Step3c - NSGアタッチ
             env:
@@ -459,7 +432,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "NSG attach apply failed" }
                 } finally { Pop-Location }
 
-          # Step4: ルートテーブル（private only）
           - task: AzureCLI@2
             displayName: Step4 - Route Table (private only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
@@ -493,7 +465,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
                 } finally { Pop-Location }
 
-          # Step5: NAT Gateway（public only）
           - task: AzureCLI@2
             displayName: Step5 - NAT Gateway (public only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
@@ -531,7 +502,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
                 } finally { Pop-Location }
 
-          # Step6: Bastion 構成（全環境）
           - task: AzureCLI@2
             displayName: Step6 - Bastion (all)
             env:
@@ -560,7 +530,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
                 } finally { Pop-Location }
 
-          # Step7a: Hub→Spoke Peering（private only）
           - task: AzureCLI@2
             displayName: Step7a - Peering Hub->Spoke
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
@@ -588,7 +557,6 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
                 } finally { Pop-Location }
 
-          # Step7b: Spoke→Hub Peering（private only）
           - task: AzureCLI@2
             displayName: Step7b - Peering Spoke->Hub
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
