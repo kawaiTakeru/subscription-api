@@ -217,10 +217,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "AAD groups creation failed" }
                 } finally { Pop-Location }
 
-          # Step2: メールのユーザーを「所有者グループ（admin）」に追加（ロールは付与しない）
+          # Step2: ユーザーをadminグループへ追加 + 3グループへRBAC割り当て
           - task: AzureCLI@2
-            displayName: Step2 - Add users to admin group
-            condition: and(succeeded(), ne('${{ parameters.email }}',''))
+            displayName: Step2 - Add users to admin group and assign RBAC to groups
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -238,31 +237,46 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
-
-                # 単一文字列でも配列に補正
+                # メール補正（単一文字列なら JSON 配列化）
                 $raw = '${{ parameters.email }}'
+                $hasEmail = $false
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
                     $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
-                    if ($tmp -isnot [System.Array]) {
+                    if ($tmp -is [System.Array]) {
+                      $hasEmail = $tmp.Count -gt 0
+                    } else {
                       $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                      $hasEmail = $true
                     }
                   } catch {
                     $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                    $hasEmail = $true
                   }
                 }
 
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-                  # ユーザー解決
+
+                  if ($hasEmail) {
+                    # ユーザー解決
+                    terraform apply -no-color -input=false -auto-approve `
+                      -target data.azuread_user.subscription_owners
+                    if ($LASTEXITCODE -ne 0) { throw "Resolve users failed (check emails/permissions)." }
+
+                    # admin グループにメンバー追加
+                    terraform apply -no-color -input=false -auto-approve `
+                      -target azuread_group_member.owner_group_members
+                    if ($LASTEXITCODE -ne 0) { throw "Add members to admin group failed" }
+                  }
+
+                  # 3グループへ RBAC 割り当て（常に実施）
                   terraform apply -no-color -input=false -auto-approve `
-                    -target data.azuread_user.subscription_owners
-                  if ($LASTEXITCODE -ne 0) { throw "Resolve users failed (check emails and Graph permissions)." }
-                  # グループメンバー追加
-                  terraform apply -no-color -input=false -auto-approve `
-                    -target azuread_group_member.owner_group_members
-                  if ($LASTEXITCODE -ne 0) { throw "Add members to admin group failed" }
+                    -target azurerm_role_assignment.group_admin_owner `
+                    -target azurerm_role_assignment.group_developer_contributor `
+                    -target azurerm_role_assignment.group_operator_reader
+                  if ($LASTEXITCODE -ne 0) { throw "Assign RBAC to groups failed" }
                 } finally { Pop-Location }
 
           # Step3: PIM（Owner/Contributorのロール管理ポリシー）- 既存グループのみ
@@ -477,7 +491,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "NSG attach apply failed" }
                 } finally { Pop-Location }
 
-          # Step7: プライベート環境のみルートテーブル関連リソース
+          # Step7: ルートテーブル（privateのみ）
           - task: AzureCLI@2
             displayName: Step7 - Route Table (private only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
@@ -511,7 +525,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
                 } finally { Pop-Location }
 
-          # Step8: パブリック環境のみNAT Gateway関連リソース
+          # Step8: NAT Gateway（publicのみ）
           - task: AzureCLI@2
             displayName: Step8 - NAT Gateway (public only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
@@ -549,7 +563,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
                 } finally { Pop-Location }
 
-          # Step9: Bastion構成（全環境共通）
+          # Step9: Bastion
           - task: AzureCLI@2
             displayName: Step9 - Bastion (all)
             env:
@@ -578,7 +592,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
                 } finally { Pop-Location }
 
-          # Step10a: Hub→Spoke Peering（プライベート環境のみ）
+          # Step10a: Hub->Spoke Peering（privateのみ）
           - task: AzureCLI@2
             displayName: Step10a - Peering Hub->Spoke
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
@@ -606,7 +620,7 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
                 } finally { Pop-Location }
 
-          # Step11b: Spoke→Hub Peering（プライベート環境のみ）
+          # Step11b: Spoke->Hub Peering（privateのみ）
           - task: AzureCLI@2
             displayName: Step11b - Peering Spoke->Hub
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
