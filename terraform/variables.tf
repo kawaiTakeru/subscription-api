@@ -8,7 +8,6 @@
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
-
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
@@ -19,7 +18,6 @@ variable "purpose_name" {
   description = "用途（例: kensho2 / 検証 など）"
   type        = string
   default     = ""
-
   validation {
     condition     = length(trimspace(var.purpose_name)) > 0
     error_message = "purpose_name は必須です。例: kensho2"
@@ -65,12 +63,10 @@ variable "billing_account_name" {
   description = "課金アカウント名"
   type        = string
 }
-
 variable "billing_profile_name" {
   description = "課金プロファイル名"
   type        = string
 }
-
 variable "invoice_section_name" {
   description = "請求セクション名"
   type        = string
@@ -134,18 +130,15 @@ variable "hub_subscription_id" {
   description = "Hub Subscription ID"
   type        = string
 }
-
 variable "hub_tenant_id" {
   description = "Hub Tenant ID（必要時のみ）"
   type        = string
   default     = ""
 }
-
 variable "hub_vnet_name" {
   description = "Hub側のVNet名"
   type        = string
 }
-
 variable "hub_rg_name" {
   description = "Hub側のリソースグループ名"
   type        = string
@@ -167,7 +160,6 @@ variable "ipam_pool_id" {
   description = "IPAM Pool Resource ID（VNet/Subnet共用）"
   type        = string
 }
-
 variable "vnet_number_of_ips" {
   description = "VNetに割り当てるIP数（例: 1024≒/22）"
   type        = number
@@ -233,7 +225,6 @@ variable "pim_owner_approver_group_names" {
   type        = list(string)
   default     = []
 }
-
 variable "pim_contributor_approver_group_names" {
   description = "PIM(Contributor)の承認者に設定するグループ displayName 一覧（既存グループを指定）"
   type        = list(string)
