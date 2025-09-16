@@ -19,6 +19,7 @@ variable "purpose_name" {
   description = "用途（例: kensho2 / 検証 など）"
   type        = string
   default     = ""
+
   validation {
     condition     = length(trimspace(var.purpose_name)) > 0
     error_message = "purpose_name は必須です。例: kensho2"
@@ -64,10 +65,12 @@ variable "billing_account_name" {
   description = "課金アカウント名"
   type        = string
 }
+
 variable "billing_profile_name" {
   description = "課金プロファイル名"
   type        = string
 }
+
 variable "invoice_section_name" {
   description = "請求セクション名"
   type        = string
@@ -101,7 +104,7 @@ variable "enable_billing_check" {
 }
 
 # -----------------------------------------------------------
-# SpokeサブスクリプションID（既存利用時に指定）
+# Spokeサブスクリプション／テナント
 # -----------------------------------------------------------
 variable "spoke_subscription_id" {
   description = "Spoke Subscription ID（既存利用時、pipeline注入）"
@@ -109,9 +112,6 @@ variable "spoke_subscription_id" {
   default     = ""
 }
 
-# -----------------------------------------------------------
-# テナントID（必要に応じて）
-# -----------------------------------------------------------
 variable "spoke_tenant_id" {
   description = "Spoke Tenant ID（必要時のみ）"
   type        = string
@@ -119,7 +119,7 @@ variable "spoke_tenant_id" {
 }
 
 # -----------------------------------------------------------
-# 管理グループリソースID
+# 管理グループ
 # -----------------------------------------------------------
 variable "management_group_id" {
   description = "管理グループのリソースID（/providers/Microsoft.Management/managementGroups/<mg-name>）"
@@ -134,15 +134,18 @@ variable "hub_subscription_id" {
   description = "Hub Subscription ID"
   type        = string
 }
+
 variable "hub_tenant_id" {
   description = "Hub Tenant ID（必要時のみ）"
   type        = string
   default     = ""
 }
+
 variable "hub_vnet_name" {
   description = "Hub側のVNet名"
   type        = string
 }
+
 variable "hub_rg_name" {
   description = "Hub側のリソースグループ名"
   type        = string
@@ -164,6 +167,7 @@ variable "ipam_pool_id" {
   description = "IPAM Pool Resource ID（VNet/Subnet共用）"
   type        = string
 }
+
 variable "vnet_number_of_ips" {
   description = "VNetに割り当てるIP数（例: 1024≒/22）"
   type        = number
@@ -185,7 +189,7 @@ variable "bastion_subnet_number_of_ips" {
 }
 
 # -----------------------------------------------------------
-# VNet種別（public/private）
+# VNet種別（public/private）: ルール切替に利用
 # -----------------------------------------------------------
 variable "vnet_type" {
   description = "VNet種別（public/private）"
@@ -199,18 +203,15 @@ variable "vnet_type" {
 }
 
 # -----------------------------------------------------------
-# VPNクライアントプールCIDR（許可元）
+# VPNクライアントプールCIDR（許可元）/ 許可ポート
 # -----------------------------------------------------------
 variable "vpn_client_pool_cidr" {
   description = "VPNクライアントプールCIDR（許可元）"
   type        = string
 }
 
-# -----------------------------------------------------------
-# サブネットで許可するポート番号（例: RDP=3389, SSH=22等）
-# -----------------------------------------------------------
 variable "allowed_port" {
-  description = "許可ポート（RDP=3389 / SSH=22 等）"
+  description = "サブネットで許可するポート番号（例: RDP=3389, SSH=22 等）"
   type        = number
   default     = 3389
 }
@@ -232,6 +233,7 @@ variable "pim_owner_approver_group_names" {
   type        = list(string)
   default     = []
 }
+
 variable "pim_contributor_approver_group_names" {
   description = "PIM(Contributor)の承認者に設定するグループ displayName 一覧（既存グループを指定）"
   type        = list(string)
