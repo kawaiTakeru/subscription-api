@@ -293,11 +293,12 @@ stages:
               TF_VAR_create_subscription: false
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
-              TF_VAR_region_code: $(Build.SourceVersion) # dummy to show; region_code is read from tfvars, not needed here
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 任意: 既定命名を上書きしたい場合のみ指定（JSON配列文字列）
-              # TF_VAR_pim_owner_approver_group_names: '["grp-bft-pim-owner-approver-dev-jpe-001"]'
-              # TF_VAR_pim_contributor_approver_group_names: '["grp-bft-pim-contributor-approver-dev-jpe-001"]'
+              # 自動作成を有効にする場合（変数定義が必要）
+              TF_VAR_pim_auto_create_approver_groups: true
+              # 既存グループを使う場合は上記を false にし、以下を実在の displayName に置き換えて指定
+              # TF_VAR_pim_owner_approver_group_names: '["grp-<proj>-pim-owner-approver-<env>-<region>-<seq>"]'
+              # TF_VAR_pim_contributor_approver_group_names: '["grp-<proj>-pim-contributor-approver-<env>-<region>-<seq>"]'
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
@@ -310,6 +311,20 @@ stages:
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
+
+                  # 1) 承認者グループ（必要時のみ作成）
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target azuread_group.pim_owner_approver `
+                    -target azuread_group.pim_contributor_approver
+                  if ($LASTEXITCODE -ne 0) { throw "Approver group creation failed" }
+
+                  # 2) PIMロール定義の読み込み（明示ターゲット）
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target data.azurerm_role_definition.pim_owner_role `
+                    -target data.azurerm_role_definition.pim_contributor_role
+                  if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
+
+                  # 3) PIMポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
