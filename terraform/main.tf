@@ -352,11 +352,12 @@ locals {
     }
   ]
 
-  # === PIM 承認者グループ命名（要求ルール） ===
+  # === PIM 承認者グループ命名（既定名） ===
   # grp-<PJ/案件名>-<pim-owner-approver|pim-contributor-approver>-<環境>-<リージョン略号>-<識別番号>
   default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
   default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 
+  # displayName 指定があればそれを優先。無ければ既定名を1件使う。
   owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
   contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
@@ -604,9 +605,9 @@ resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
 }
 
 resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
-  count             = local.is_public ? 1 : 0
-  provider          = azurerm.spoke
-  nat_gateway_id    = azurerm_nat_gateway.natgw[0].id
+  count               = local.is_public ? 1 : 0
+  provider            = azurerm.spoke
+  nat_gateway_id      = azurerm_nat_gateway.natgw[0].id
   public_ip_prefix_id = azurerm_public_ip_prefix.natgw_prefix[0].id
 }
 
@@ -713,37 +714,53 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 # PIM設定（Owner / Contributor）
 # -----------------------------------------------------------
 
-# 承認者グループ（displayName）を役割別に解決
+# 既存グループ名が渡された場合の解決（displayName）
 data "azuread_group" "pim_owner_approver_groups" {
-  for_each         = toset(local.owner_approver_group_names)
+  for_each         = length(var.pim_owner_approver_group_names) > 0 ? toset(var.pim_owner_approver_group_names) : []
   provider         = azuread.spoke
   display_name     = each.value
   security_enabled = true
 }
 
 data "azuread_group" "pim_contributor_approver_groups" {
-  for_each         = toset(local.contributor_approver_group_names)
+  for_each         = length(var.pim_contributor_approver_group_names) > 0 ? toset(var.pim_contributor_approver_group_names) : []
   provider         = azuread.spoke
   display_name     = each.value
   security_enabled = true
 }
 
-# 承認者リスト（オブジェクトID配列）
+# 必要に応じた承認者グループの自動作成（既存名が未指定かつフラグがtrue）
+resource "azuread_group" "pim_owner_approver" {
+  count            = var.pim_auto_create_approver_groups && length(var.pim_owner_approver_group_names) == 0 ? 1 : 0
+  provider         = azuread.spoke
+  display_name     = local.default_owner_approver_group_name
+  security_enabled = true
+  mail_enabled     = false
+  description      = "PIM approver group for Owner role (${local.default_owner_approver_group_name})"
+}
+
+resource "azuread_group" "pim_contributor_approver" {
+  count            = var.pim_auto_create_approver_groups && length(var.pim_contributor_approver_group_names) == 0 ? 1 : 0
+  provider         = azuread.spoke
+  display_name     = local.default_contributor_approver_group_name
+  security_enabled = true
+  mail_enabled     = false
+  description      = "PIM approver group for Contributor role (${local.default_contributor_approver_group_name})"
+}
+
+# 承認者の objectId 一覧（既存＋自動作成をマージ）
 locals {
-  pim_owner_approvers = [
-    for g in data.azuread_group.pim_owner_approver_groups :
-    {
-      type      = "Group"
-      object_id = g.object_id
-    }
-  ]
-  pim_contributor_approvers = [
-    for g in data.azuread_group.pim_contributor_approver_groups :
-    {
-      type      = "Group"
-      object_id = g.object_id
-    }
-  ]
+  owner_approver_group_object_ids = concat(
+    length(var.pim_owner_approver_group_names) > 0 ? [for g in data.azuread_group.pim_owner_approver_groups : g.object_id] : [],
+    length(azuread_group.pim_owner_approver) > 0 ? [azuread_group.pim_owner_approver[0].object_id] : []
+  )
+  contributor_approver_group_object_ids = concat(
+    length(var.pim_contributor_approver_group_names) > 0 ? [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id] : [],
+    length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
+  )
+
+  pim_owner_approvers = [for id in local.owner_approver_group_object_ids : { type = "Group", object_id = id }]
+  pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
 }
 
 # ロール定義
@@ -769,9 +786,9 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
     maximum_duration                                   = "PT2H"
     require_multifactor_authentication                 = false
     required_conditional_access_authentication_context = null
-    require_justification                               = true
-    require_ticket_info                                 = false
-    require_approval                                    = true
+    require_justification                              = true
+    require_ticket_info                                = false
+    require_approval                                   = true
 
     approval_stage {
       dynamic "primary_approver" {
@@ -790,8 +807,8 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
   }
 
   active_assignment_rules {
-    expiration_required               = true
-    expire_after                      = "P15D"
+    expiration_required                = true
+    expire_after                       = "P15D"
     require_multifactor_authentication = true
     require_justification              = true
   }
@@ -861,9 +878,9 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
     maximum_duration                                   = "PT8H"
     require_multifactor_authentication                 = false
     required_conditional_access_authentication_context = null
-    require_justification                               = true
-    require_ticket_info                                 = false
-    require_approval                                    = true
+    require_justification                              = true
+    require_ticket_info                                = false
+    require_approval                                   = true
 
     approval_stage {
       dynamic "primary_approver" {
@@ -882,8 +899,8 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
   }
 
   active_assignment_rules {
-    expiration_required               = true
-    expire_after                      = "P15D"
+    expiration_required                = true
+    expire_after                       = "P15D"
     require_multifactor_authentication = true
     require_justification              = true
   }
