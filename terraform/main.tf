@@ -36,7 +36,7 @@ provider "azurerm" {
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
-# AzureAD プロバイダ（メール→ユーザー解決、PIM 承認者解決、グループ作成に使用）
+# AzureAD プロバイダ（メール→ユーザー解決、PIM承認者解決、管理グループ作成に使用）
 provider "azuread" {
   alias     = "spoke"
   tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
@@ -325,7 +325,7 @@ locals {
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "*"
       source_port_range          = "*"
@@ -336,7 +336,7 @@ locals {
     {
       name                       = "AllowAzureCloudOutbound"
       priority                   = 110
-      direction                   = "Outbound"
+      direction                  = "Outbound"
       access                     = "Allow"
       protocol                   = "Tcp"
       source_port_range          = "*"
@@ -420,7 +420,7 @@ resource "azuread_group" "group_operator" {
 }
 
 # -----------------------------------------------------------
-# メール（UPN）から AAD ユーザー解決 → 所有者グループ（admin）にメンバー追加
+# メール（UPN）からユーザー解決 → 所有者グループ（admin）にメンバー追加
 # -----------------------------------------------------------
 data "azuread_user" "subscription_owners" {
   provider            = azuread.spoke
@@ -431,8 +431,32 @@ data "azuread_user" "subscription_owners" {
 resource "azuread_group_member" "owner_group_members" {
   provider         = azuread.spoke
   for_each         = { for upn in var.subscription_owner_emails : upn => upn }
-  group_object_id  = azuread_group.group_admin.id
+  group_object_id  = azuread_group.group_admin.object_id
   member_object_id = data.azuread_user.subscription_owners[each.key].object_id
+}
+
+# -----------------------------------------------------------
+# 3グループへサブスクリプションRBAC割り当て
+# -----------------------------------------------------------
+resource "azurerm_role_assignment" "group_admin_owner" {
+  provider             = azurerm.spoke
+  scope                = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_name = "Owner"
+  principal_id         = azuread_group.group_admin.object_id
+}
+
+resource "azurerm_role_assignment" "group_developer_contributor" {
+  provider             = azurerm.spoke
+  scope                = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_name = "Contributor"
+  principal_id         = azuread_group.group_developer.object_id
+}
+
+resource "azurerm_role_assignment" "group_operator_reader" {
+  provider             = azurerm.spoke
+  scope                = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_name = "Reader"
+  principal_id         = azuread_group.group_operator.object_id
 }
 
 # -----------------------------------------------------------
@@ -863,7 +887,23 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
       }
     }
 
-  [...]
+    eligible_activations {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
   }
 }
 
@@ -941,7 +981,23 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
       }
     }
 
-  [...]
+    eligible_activations {
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+    }
   }
 }
 
@@ -973,11 +1029,5 @@ output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub
 output "spoke_to_hub_peering_id"   { value = azurerm_virtual_network_peering.spoke_to_hub.id }
 output "bastion_host_id"           { value = azurerm_bastion_host.bastion.id }
 output "bastion_public_ip"         { value = azurerm_public_ip.bastion_pip.ip_address }
-
-# ターゲット適用時も安全な参照（存在しなければ null）
-output "natgw_id" {
-  value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null
-}
-output "natgw_public_ip" {
-  value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null
-}
+output "natgw_id"                  { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id : null }
+output "natgw_public_ip"           { value = local.is_public && length(azurerm_public_ip.natgw_pip) > 0 ? azurerm_public_ip.natgw_pip[0].ip_address : null }
