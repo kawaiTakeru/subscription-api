@@ -282,7 +282,6 @@ stages:
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
               # 既存グループを使用（自動作成は無効化）
-              TF_VAR_pim_auto_create_approver_groups: false
               TF_VAR_pim_owner_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
               TF_VAR_pim_contributor_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
               TF_INPUT: 'false'
