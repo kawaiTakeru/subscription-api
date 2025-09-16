@@ -8,6 +8,7 @@
 variable "project_name" {
   description = "PJ/案件名（例: bft2）"
   type        = string
+
   validation {
     condition     = length(trimspace(var.project_name)) > 0
     error_message = "project_name は必須です。例: bft2"
@@ -100,7 +101,7 @@ variable "enable_billing_check" {
 }
 
 # -----------------------------------------------------------
-# Spokeサブスクリプション／テナント
+# SpokeサブスクリプションID（既存利用時に指定）
 # -----------------------------------------------------------
 variable "spoke_subscription_id" {
   description = "Spoke Subscription ID（既存利用時、pipeline注入）"
@@ -108,6 +109,17 @@ variable "spoke_subscription_id" {
   default     = ""
 }
 
+# Step2: 所有者グループ(admin)に追加するユーザーのメール（UPN）一覧
+# Pipeline から TF_VAR_subscription_owner_emails で JSON 配列が渡されます。
+variable "subscription_owner_emails" {
+  description = "所有者グループに追加するユーザーの UPN 一覧（例: [\"alice@contoso.com\",\"bob@contoso.com\"]）"
+  type        = list(string)
+  default     = []
+}
+
+# -----------------------------------------------------------
+# テナントID（必要に応じて）
+# -----------------------------------------------------------
 variable "spoke_tenant_id" {
   description = "Spoke Tenant ID（必要時のみ）"
   type        = string
@@ -115,7 +127,7 @@ variable "spoke_tenant_id" {
 }
 
 # -----------------------------------------------------------
-# 管理グループ
+# 管理グループリソースID
 # -----------------------------------------------------------
 variable "management_group_id" {
   description = "管理グループのリソースID（/providers/Microsoft.Management/managementGroups/<mg-name>）"
@@ -181,7 +193,7 @@ variable "bastion_subnet_number_of_ips" {
 }
 
 # -----------------------------------------------------------
-# VNet種別（public/private）: ルール切替に利用
+# VNet種別（public/private）: Bastion NSG命名やルール切替に利用
 # -----------------------------------------------------------
 variable "vnet_type" {
   description = "VNet種別（public/private）"
@@ -195,38 +207,54 @@ variable "vnet_type" {
 }
 
 # -----------------------------------------------------------
-# VPNクライアントプールCIDR（許可元）/ 許可ポート
+# VPNクライアントプールCIDR（許可元）
 # -----------------------------------------------------------
 variable "vpn_client_pool_cidr" {
   description = "VPNクライアントプールCIDR（許可元）"
   type        = string
 }
 
+# -----------------------------------------------------------
+# サブネットで許可するポート番号（例: RDP=3389, SSH=22等）
+# -----------------------------------------------------------
 variable "allowed_port" {
-  description = "サブネットで許可するポート番号（例: RDP=3389, SSH=22 等）"
+  description = "許可ポート（RDP=3389 / SSH=22 等）"
   type        = number
   default     = 3389
 }
 
-# -----------------------------------------------------------
-# サブスクリプションの所有者に付与するユーザー（メール/UPN一覧）
-# -----------------------------------------------------------
-variable "subscription_owner_emails" {
-  description = "Subscription Owner に付与するユーザーのメール（UPN）一覧（例: [\"alice@example.com\"]）"
-  type        = list(string)
-  default     = []
+# --- PIM 承認者グループ自動作成フラグ ---
+variable "pim_auto_create_approver_groups" {
+  description = "PIM 承認者グループを命名規則で自動作成するか"
+  type        = bool
+  default     = false
 }
 
-# -----------------------------------------------------------
-# PIM 承認者グループ（既存グループの displayName を指定）
-# -----------------------------------------------------------
+# --- 既存グループ displayName 指定（指定時は自動作成より優先） ---
 variable "pim_owner_approver_group_names" {
-  description = "PIM(Owner)の承認者に設定するグループ displayName 一覧（既存グループを指定）"
+  description = "PIM(Owner)の承認者に設定するグループ displayName 一覧"
   type        = list(string)
   default     = []
 }
 variable "pim_contributor_approver_group_names" {
-  description = "PIM(Contributor)の承認者に設定するグループ displayName 一覧（既存グループを指定）"
+  description = "PIM(Contributor)の承認者に設定するグループ displayName 一覧"
   type        = list(string)
   default     = []
+}
+
+# --- 命名トークン（必要に応じて変更可能） ---
+variable "pim_group_prefix" {
+  description = "承認者グループのプレフィックス"
+  type        = string
+  default     = "grp"
+}
+variable "pim_group_role_token_owner" {
+  description = "Owner承認者グループのロールトークン"
+  type        = string
+  default     = "pim-owner-approver"
+}
+variable "pim_group_role_token_contributor" {
+  description = "Contributor承認者グループのロールトークン"
+  type        = string
+  default     = "pim-contributor-approver"
 }
