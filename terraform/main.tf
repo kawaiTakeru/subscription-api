@@ -351,6 +351,14 @@ locals {
       destination_address_prefix = "VirtualNetwork"
     }
   ]
+
+  # === PIM 承認者グループ命名（既定名） ===
+  default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+
+  # displayName 指定があればそれを優先。無ければ既定名を1件使う。
+  owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
+  contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
 
 # -----------------------------------------------------------
@@ -412,7 +420,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 # -----------------------------------------------------------
-# NSG（業務用/サブネット用）- 1回だけ定義
+# NSG（業務用/サブネット用）
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
@@ -442,7 +450,7 @@ resource "azurerm_network_security_group" "subnet_nsg" {
 }
 
 # -----------------------------------------------------------
-# Bastion用NSG - 1回だけ定義
+# Bastion用NSG
 # -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
@@ -740,10 +748,16 @@ data "azuread_group" "pim_contributor_approver_groups" {
   security_enabled = true
 }
 
-# 承認者の objectId 一覧（既存のみを採用）
+# 承認者の objectId 一覧（既存＋自動作成をマージ）
 locals {
-  owner_approver_group_object_ids       = [for g in data.azuread_group.pim_owner_approver_groups : g.object_id]
-  contributor_approver_group_object_ids = [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id]
+  owner_approver_group_object_ids = concat(
+    length(var.pim_owner_approver_group_names) > 0 ? [for g in data.azuread_group.pim_owner_approver_groups : g.object_id] : [],
+    length(azuread_group.pim_owner_approver) > 0 ? [azuread_group.pim_owner_approver[0].object_id] : []
+  )
+  contributor_approver_group_object_ids = concat(
+    length(var.pim_contributor_approver_group_names) > 0 ? [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id] : [],
+    length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
+  )
 
   pim_owner_approvers       = [for id in local.owner_approver_group_object_ids       : { type = "Group", object_id = id }]
   pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
@@ -963,19 +977,26 @@ output "created_subscription_id" {
 # -----------------------------------------------------------
 # Outputs（デバッグ・確認用）
 # -----------------------------------------------------------
-output "debug_project_name"        { value = var.project_name }
-output "debug_purpose_name"        { value = var.purpose_name }
-output "debug_project_slug"        { value = local.project_slug }
-output "debug_purpose_slug"        { value = local.purpose_slug }
-output "debug_base_parts"          { value = local.base_parts }
-output "base_naming"               { value = local.base }
-output "rg_expected_name"          { value = local.name_rg }
-output "vnet_expected_name"        { value = local.name_vnet }
-output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
-output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
-output "spoke_to_hub_peering_id"   { value = azurerm_virtual_network_peering.spoke_to_hub.id }
-output "bastion_host_id"           { value = azurerm_bastion_host.bastion.id }
-output "bastion_public_ip"         { value = azurerm_public_ip.bastion_pip.ip_address }
-output "natgw_id"                  { value = local.is_public && length(azurerm_nat_gateway.natgw) > 0 ? azurerm_nat_gateway.natgw[0].id
+output "debug_project_name" { value = var.project_name }
+output "debug_purpose_name" { value = var.purpose_name }
+output "debug_project_slug" { value = local.project_slug }
+output "debug_purpose_slug" { value = local.purpose_slug }
+output "debug_base_parts"   { value = local.base_parts }
+output "base_naming"        { value = local.base }
+output "rg_expected_name"   { value = local.name_rg }
+output "vnet_expected_name" { value = local.name_vnet }
+output "subscription_id"    { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"      { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"    { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+output "bastion_host_id"         { value = azurerm_bastion_host.bastion.id }
+output "bastion_public_ip"       { value = azurerm_public_ip.bastion_pip.ip_address }
+
+# ターゲット適用時も安全な参照（存在しなければ null）
+output "natgw_id" {
+  value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null
+}
+output "natgw_public_ip" {
+  value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null
+}
