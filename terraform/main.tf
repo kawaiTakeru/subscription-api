@@ -36,7 +36,7 @@ provider "azurerm" {
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
-# AzureAD プロバイダ（承認者グループ解決・ユーザー解決に使用）
+# AzureAD プロバイダ（メール→ユーザー解決、PIM 承認者解決に使用）
 provider "azuread" {
   alias     = "spoke"
   tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
@@ -351,14 +351,6 @@ locals {
       destination_address_prefix = "VirtualNetwork"
     }
   ]
-
-  # === PIM 承認者グループ命名（既定名） ===
-  default_owner_approver_group_name       = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_owner}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  default_contributor_approver_group_name = local.project_slug != "" ? "${var.pim_group_prefix}-${local.project_slug}-${var.pim_group_role_token_contributor}-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-
-  # displayName 指定があればそれを優先。無ければ既定名を1件使う。
-  owner_approver_group_names       = length(var.pim_owner_approver_group_names) > 0 ? var.pim_owner_approver_group_names : compact([local.default_owner_approver_group_name])
-  contributor_approver_group_names = length(var.pim_contributor_approver_group_names) > 0 ? var.pim_contributor_approver_group_names : compact([local.default_contributor_approver_group_name])
 }
 
 # -----------------------------------------------------------
@@ -730,40 +722,31 @@ resource "azurerm_role_assignment" "subscription_owner" {
 }
 
 # -----------------------------------------------------------
-# PIM設定（Owner / Contributor）
+# PIM設定（Owner / Contributor）- 既存グループのみ使用
 # -----------------------------------------------------------
 
-# 既存グループ名が渡された場合の解決（displayName）
 data "azuread_group" "pim_owner_approver_groups" {
-  for_each         = length(var.pim_owner_approver_group_names) > 0 ? toset(var.pim_owner_approver_group_names) : []
   provider         = azuread.spoke
+  for_each         = toset(var.pim_owner_approver_group_names)
   display_name     = each.value
   security_enabled = true
 }
 
 data "azuread_group" "pim_contributor_approver_groups" {
-  for_each         = length(var.pim_contributor_approver_group_names) > 0 ? toset(var.pim_contributor_approver_group_names) : []
   provider         = azuread.spoke
+  for_each         = toset(var.pim_contributor_approver_group_names)
   display_name     = each.value
   security_enabled = true
 }
 
-# 承認者の objectId 一覧（既存＋自動作成をマージ）
 locals {
-  owner_approver_group_object_ids = concat(
-    length(var.pim_owner_approver_group_names) > 0 ? [for g in data.azuread_group.pim_owner_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_owner_approver) > 0 ? [azuread_group.pim_owner_approver[0].object_id] : []
-  )
-  contributor_approver_group_object_ids = concat(
-    length(var.pim_contributor_approver_group_names) > 0 ? [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id] : [],
-    length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
-  )
+  owner_approver_group_object_ids       = [for g in data.azuread_group.pim_owner_approver_groups : g.object_id]
+  contributor_approver_group_object_ids = [for g in data.azuread_group.pim_contributor_approver_groups : g.object_id]
 
   pim_owner_approvers       = [for id in local.owner_approver_group_object_ids       : { type = "Group", object_id = id }]
   pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
 }
 
-# ロール定義
 data "azurerm_role_definition" "pim_owner_role" {
   provider = azurerm.spoke
   name     = "Owner"
@@ -776,7 +759,6 @@ data "azurerm_role_definition" "pim_contributor_role" {
   scope    = "/subscriptions/${var.spoke_subscription_id}"
 }
 
-# 所有者ロールの PIM ルール
 resource "azurerm_role_management_policy" "pim_owner_role_rules" {
   provider           = azurerm.spoke
   scope              = "/subscriptions/${var.spoke_subscription_id}"
@@ -815,62 +797,23 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
     }
-
     active_assignments {
-      admin_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
     }
-
     eligible_activations {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
     }
   }
 }
 
-# 共同作成者ロールの PIM ルール
 resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
   provider           = azurerm.spoke
   scope              = "/subscriptions/${var.spoke_subscription_id}"
@@ -909,57 +852,19 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
     }
-
     active_assignments {
-      admin_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
     }
-
     eligible_activations {
-      admin_notifications {
-        default_recipients    = false
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      assignee_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
-      approver_notifications {
-        default_recipients    = true
-        additional_recipients = []
-        notification_level    = "All"
-      }
+      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
+      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
     }
   }
 }
@@ -977,26 +882,21 @@ output "created_subscription_id" {
 # -----------------------------------------------------------
 # Outputs（デバッグ・確認用）
 # -----------------------------------------------------------
-output "debug_project_name" { value = var.project_name }
-output "debug_purpose_name" { value = var.purpose_name }
-output "debug_project_slug" { value = local.project_slug }
-output "debug_purpose_slug" { value = local.purpose_slug }
-output "debug_base_parts"   { value = local.base_parts }
-output "base_naming"        { value = local.base }
-output "rg_expected_name"   { value = local.name_rg }
-output "vnet_expected_name" { value = local.name_vnet }
-output "subscription_id"    { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "spoke_rg_name"      { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"    { value = azurerm_virtual_network.vnet.name }
-output "hub_to_spoke_peering_id" { value = azurerm_virtual_network_peering.hub_to_spoke.id }
-output "spoke_to_hub_peering_id" { value = azurerm_virtual_network_peering.spoke_to_hub.id }
-output "bastion_host_id"         { value = azurerm_bastion_host.bastion.id }
-output "bastion_public_ip"       { value = azurerm_public_ip.bastion_pip.ip_address }
-
+output "debug_project_name"             { value = var.project_name }
+output "debug_purpose_name"             { value = var.purpose_name }
+output "debug_project_slug"             { value = local.project_slug }
+output "debug_purpose_slug"             { value = local.purpose_slug }
+output "debug_base_parts"               { value = local.base_parts }
+output "base_naming"                    { value = local.base }
+output "rg_expected_name"               { value = local.name_rg }
+output "vnet_expected_name"             { value = local.name_vnet }
+output "subscription_id"                { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"                  { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"                { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id"        { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id"        { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+output "bastion_host_id"                { value = azurerm_bastion_host.bastion.id }
+output "bastion_public_ip"              { value = azurerm_public_ip.bastion_pip.ip_address }
 # ターゲット適用時も安全な参照（存在しなければ null）
-output "natgw_id" {
-  value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null
-}
-output "natgw_public_ip" {
-  value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null
-}
+output "natgw_id"                       { value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null }
+output "natgw_public_ip"                { value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null }
