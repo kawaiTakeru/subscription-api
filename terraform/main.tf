@@ -759,8 +759,8 @@ locals {
     length(azuread_group.pim_contributor_approver) > 0 ? [azuread_group.pim_contributor_approver[0].object_id] : []
   )
 
-  pim_owner_approvers      = [for id in local.owner_approver_group_object_ids      : { type = "Group", object_id = id }]
-  pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids : { type = "Group", object_id = id }]
+  pim_owner_approvers       = [for id in local.owner_approver_group_object_ids        : { type = "Group", object_id = id }]
+  pim_contributor_approvers = [for id in local.contributor_approver_group_object_ids  : { type = "Group", object_id = id }]
 }
 
 # ロール定義
@@ -815,19 +815,57 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     active_assignments {
-      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     eligible_activations {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
   }
 }
@@ -871,19 +909,57 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     active_assignments {
-      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     eligible_activations {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
   }
 }
