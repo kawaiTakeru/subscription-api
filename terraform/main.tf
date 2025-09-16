@@ -702,6 +702,24 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 }
 
 # -----------------------------------------------------------
+# Subscription Owner 付与（メール→ユーザー解決→ロール割当）
+# -----------------------------------------------------------
+
+# メール（UPN）から AAD ユーザー解決（見つからなければエラー）
+data "azuread_user" "subscription_owners" {
+  for_each             = toset(var.subscription_owner_emails)
+  user_principal_name  = each.value
+}
+
+# サブスクリプションの Owner ロールを付与
+resource "azurerm_role_assignment" "subscription_owner" {
+  for_each             = data.azuread_user.subscription_owners
+  scope                = "/subscriptions/${var.spoke_subscription_id}"
+  role_definition_name = "Owner"
+  principal_id         = each.value.object_id
+}
+
+# -----------------------------------------------------------
 # PIM設定（Owner / Contributor）
 # -----------------------------------------------------------
 
