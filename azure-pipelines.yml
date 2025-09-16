@@ -155,7 +155,7 @@ stages:
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
-                    # 2) data を単体ターゲットで読み出し
+                    # 2) data を単体ターゲットで読み出し（refresh-only を使わない）
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
@@ -185,7 +185,7 @@ stages:
 
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 4) Azure CLI が新規サブスクを認識するまで待機
+                    # 4) Azure CLI が新規サブスクを認識するまで待機（'not known by Azure CLI' 回避）
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -293,10 +293,11 @@ stages:
               TF_VAR_create_subscription: false
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_region_code: $(Build.SourceVersion) # dummy to show; region_code is read from tfvars, not needed here
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 承認者グループの displayName 配列（JSON文字列）。最低1つを指定推奨。
-              # 例: '["grp-pim-approvers"]'
-              # TF_VAR_pim_approver_group_names: '["<your-approver-group-display-name>"]'
+              # 任意: 既定命名を上書きしたい場合のみ指定（JSON配列文字列）
+              # TF_VAR_pim_owner_approver_group_names: '["grp-bft-pim-owner-approver-dev-jpe-001"]'
+              # TF_VAR_pim_contributor_approver_group_names: '["grp-bft-pim-contributor-approver-dev-jpe-001"]'
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
@@ -309,7 +310,6 @@ stages:
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-                  # PIMの2つのRole Management Policyをターゲット適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
