@@ -36,17 +36,14 @@ provider "azurerm" {
   tenant_id       = var.hub_tenant_id != "" ? var.hub_tenant_id : null
 }
 
-# AzureAD プロバイダ（メール→ユーザー解決、PIM 承認者解決に使用）
 provider "azuread" {
   alias     = "spoke"
   tenant_id = var.spoke_tenant_id != "" ? var.spoke_tenant_id : null
 }
 
 locals {
-  # サブスクリプション新規作成判定（spoke_subscription_id未指定かつcreate_subscription=true）
   need_create_subscription = var.create_subscription && var.spoke_subscription_id == ""
 
-  # 新規作成時は azapi の data/resource から取得、既存流用時はそのまま
   effective_spoke_subscription_id = coalesce(
     var.spoke_subscription_id != "" ? var.spoke_subscription_id : null,
     local.need_create_subscription ? try(jsondecode(data.azapi_resource.subscription_get[0].output).properties.subscriptionId, null) : null,
@@ -106,10 +103,8 @@ locals {
   is_public  = lower(var.vnet_type) == "public"
   is_private = !local.is_public
 
-  # Bastion 443受信元
   bastion_https_source = local.is_public ? "Internet" : var.vpn_client_pool_cidr
 
-  # --- Public Subnet NSGルール ---
   public_subnet_nsg_rules = [
     {
       name                       = "AllowBastionInbound"
@@ -161,7 +156,6 @@ locals {
     }
   ]
 
-  # --- Public Bastion NSGルール ---
   public_bastion_nsg_rules = [
     {
       name                       = "AllowHttpsInbound"
@@ -207,7 +201,6 @@ locals {
       source_address_prefix      = "VirtualNetwork"
       destination_address_prefix = "VirtualNetwork"
     },
-    # 送信ルール
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
@@ -254,7 +247,6 @@ locals {
     }
   ]
 
-  # --- Private Subnet NSGルール ---
   private_subnet_nsg_rules = [
     {
       name                       = "AllowBastionInbound"
@@ -270,7 +262,6 @@ locals {
     }
   ]
 
-  # --- Private Bastion NSGルール ---
   private_bastion_nsg_rules = [
     {
       name                       = "AllowInbound"
@@ -316,7 +307,6 @@ locals {
       source_address_prefix      = "VirtualNetwork"
       destination_address_prefix = "VirtualNetwork"
     },
-    # 送信ルール
     {
       name                       = "AllowSshRdpOutbound"
       priority                   = 100
@@ -353,9 +343,7 @@ locals {
   ]
 }
 
-# -----------------------------------------------------------
-# サブスクリプション新規作成（azapi + alias方式）
-# -----------------------------------------------------------
+# Subscription creation via alias
 resource "azapi_resource" "subscription" {
   count     = local.need_create_subscription ? 1 : 0
   type      = "Microsoft.Subscription/aliases@2021-10-01"
@@ -387,18 +375,14 @@ data "azapi_resource" "subscription_get" {
   depends_on = [azapi_resource.subscription]
 }
 
-# -----------------------------------------------------------
 # Resource Group
-# -----------------------------------------------------------
 resource "azurerm_resource_group" "rg" {
   provider = azurerm.spoke
   name     = local.name_rg
   location = var.region
 }
 
-# -----------------------------------------------------------
-# Virtual Network
-# -----------------------------------------------------------
+# VNet
 resource "azurerm_virtual_network" "vnet" {
   provider            = azurerm.spoke
   name                = local.name_vnet
@@ -411,9 +395,7 @@ resource "azurerm_virtual_network" "vnet" {
   }
 }
 
-# -----------------------------------------------------------
-# NSG（業務用/サブネット用）
-# -----------------------------------------------------------
+# NSGs
 resource "azurerm_network_security_group" "subnet_nsg" {
   provider            = azurerm.spoke
   name                = local.name_nsg
@@ -441,9 +423,6 @@ resource "azurerm_network_security_group" "subnet_nsg" {
   }
 }
 
-# -----------------------------------------------------------
-# Bastion用NSG
-# -----------------------------------------------------------
 resource "azurerm_network_security_group" "bastion_nsg" {
   provider            = azurerm.spoke
   name                = local.name_bastion_nsg
@@ -467,9 +446,7 @@ resource "azurerm_network_security_group" "bastion_nsg" {
   }
 }
 
-# -----------------------------------------------------------
-# Subnet（業務用）
-# -----------------------------------------------------------
+# Subnets
 resource "azurerm_subnet" "subnet" {
   provider             = azurerm.spoke
   name                 = local.name_subnet
@@ -482,9 +459,6 @@ resource "azurerm_subnet" "subnet" {
   }
 }
 
-# -----------------------------------------------------------
-# Subnet（Bastion用/AzureBastionSubnet）
-# -----------------------------------------------------------
 resource "azurerm_subnet" "bastion_subnet" {
   provider             = azurerm.spoke
   name                 = "AzureBastionSubnet"
@@ -497,9 +471,7 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
-# -----------------------------------------------------------
-# NSGアソシエーション
-# -----------------------------------------------------------
+# NSG associations
 resource "azurerm_subnet_network_security_group_association" "subnet_assoc" {
   provider                  = azurerm.spoke
   subnet_id                 = azurerm_subnet.subnet.id
@@ -512,9 +484,7 @@ resource "azurerm_subnet_network_security_group_association" "bastion_assoc" {
   network_security_group_id = azurerm_network_security_group.bastion_nsg.id
 }
 
-# -----------------------------------------------------------
-# Bastion Public IP
-# -----------------------------------------------------------
+# Bastion
 resource "azurerm_public_ip" "bastion_pip" {
   provider            = azurerm.spoke
   name                = local.name_bastion_public_ip
@@ -526,9 +496,6 @@ resource "azurerm_public_ip" "bastion_pip" {
   ip_version        = "IPv4"
 }
 
-# -----------------------------------------------------------
-# Bastion Host
-# -----------------------------------------------------------
 resource "azurerm_bastion_host" "bastion" {
   provider            = azurerm.spoke
   name                = local.name_bastion_host
@@ -551,9 +518,7 @@ resource "azurerm_bastion_host" "bastion" {
   tunneling_enabled      = false
 }
 
-# -----------------------------------------------------------
-# NAT Gateway構成（パブリック環境のみ）
-# -----------------------------------------------------------
+# NAT Gateway (public only)
 resource "azurerm_public_ip" "natgw_pip" {
   count               = local.is_public ? 1 : 0
   provider            = azurerm.spoke
@@ -609,9 +574,7 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
   nat_gateway_id = azurerm_nat_gateway.natgw[0].id
 }
 
-# -----------------------------------------------------------
-# ルートテーブル・ルート（プライベート環境のみ）
-# -----------------------------------------------------------
+# Routes (private only)
 resource "azurerm_route_table" "route_table_private" {
   count               = local.is_private ? 1 : 0
   provider            = azurerm.spoke
@@ -667,9 +630,7 @@ resource "azurerm_subnet_route_table_association" "subnet_rt_assoc" {
   route_table_id = azurerm_route_table.route_table_private[0].id
 }
 
-# -----------------------------------------------------------
-# VNet Peering（Hub⇔Spoke）
-# -----------------------------------------------------------
+# VNet peering
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   provider                  = azurerm.hub
   name                      = local.name_vnetpeer_hub2spoke
@@ -701,18 +662,13 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   ]
 }
 
-# -----------------------------------------------------------
-# サブスクリプション Owner 付与（メール→ユーザー解決→ロール割当）
-# -----------------------------------------------------------
-
-# メール（UPN）から AAD ユーザー解決（見つからなければエラー）
+# ----- Owner assignment by emails -----
 data "azuread_user" "subscription_owners" {
   provider            = azuread.spoke
   for_each            = toset(var.subscription_owner_emails)
   user_principal_name = each.value
 }
 
-# サブスクリプションの Owner ロールを付与
 resource "azurerm_role_assignment" "subscription_owner" {
   provider             = azurerm.spoke
   for_each             = data.azuread_user.subscription_owners
@@ -721,10 +677,7 @@ resource "azurerm_role_assignment" "subscription_owner" {
   principal_id         = each.value.object_id
 }
 
-# -----------------------------------------------------------
-# PIM設定（Owner / Contributor）- 既存グループのみ使用
-# -----------------------------------------------------------
-
+# ----- PIM policies (existing approver groups only) -----
 data "azuread_group" "pim_owner_approver_groups" {
   provider         = azuread.spoke
   for_each         = toset(var.pim_owner_approver_group_names)
@@ -797,19 +750,57 @@ resource "azurerm_role_management_policy" "pim_owner_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     active_assignments {
-      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     eligible_activations {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
   }
 }
@@ -852,24 +843,62 @@ resource "azurerm_role_management_policy" "pim_contributor_role_rules" {
 
   notification_rules {
     eligible_assignments {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     active_assignments {
-      admin_notifications     { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = false additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
+
     eligible_activations {
-      admin_notifications     { default_recipients = false additional_recipients = [] notification_level = "All" }
-      assignee_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
-      approver_notifications  { default_recipients = true  additional_recipients = [] notification_level = "All" }
+      admin_notifications {
+        default_recipients    = false
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      assignee_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
+      approver_notifications {
+        default_recipients    = true
+        additional_recipients = []
+        notification_level    = "All"
+      }
     }
   }
 }
 
-# ★ created_subscription_id：既存なら var を、作成なら data/resource を jsondecode して GUID を返す
+# Outputs
 output "created_subscription_id" {
   description = "Spoke subscription id (newly created or reused)."
   value = coalesce(
@@ -879,24 +908,24 @@ output "created_subscription_id" {
   )
 }
 
-# -----------------------------------------------------------
-# Outputs（デバッグ・確認用）
-# -----------------------------------------------------------
-output "debug_project_name"             { value = var.project_name }
-output "debug_purpose_name"             { value = var.purpose_name }
-output "debug_project_slug"             { value = local.project_slug }
-output "debug_purpose_slug"             { value = local.purpose_slug }
-output "debug_base_parts"               { value = local.base_parts }
-output "base_naming"                    { value = local.base }
-output "rg_expected_name"               { value = local.name_rg }
-output "vnet_expected_name"             { value = local.name_vnet }
-output "subscription_id"                { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
-output "spoke_rg_name"                  { value = azurerm_resource_group.rg.name }
-output "spoke_vnet_name"                { value = azurerm_virtual_network.vnet.name }
-output "hub_to_spoke_peering_id"        { value = azurerm_virtual_network_peering.hub_to_spoke.id }
-output "spoke_to_hub_peering_id"        { value = azurerm_virtual_network_peering.spoke_to_hub.id }
-output "bastion_host_id"                { value = azurerm_bastion_host.bastion.id }
-output "bastion_public_ip"              { value = azurerm_public_ip.bastion_pip.ip_address }
-# ターゲット適用時も安全な参照（存在しなければ null）
-output "natgw_id"                       { value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null }
-output "natgw_public_ip"                { value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null }
+output "debug_project_name"        { value = var.project_name }
+output "debug_purpose_name"        { value = var.purpose_name }
+output "debug_project_slug"        { value = local.project_slug }
+output "debug_purpose_slug"        { value = local.purpose_slug }
+output "debug_base_parts"          { value = local.base_parts }
+output "base_naming"               { value = local.base }
+output "rg_expected_name"          { value = local.name_rg }
+output "vnet_expected_name"        { value = local.name_vnet }
+output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
+output "spoke_rg_name"             { value = azurerm_resource_group.rg.name }
+output "spoke_vnet_name"           { value = azurerm_virtual_network.vnet.name }
+output "hub_to_spoke_peering_id"   { value = azurerm_virtual_network_peering.hub_to_spoke.id }
+output "spoke_to_hub_peering_id"   { value = azurerm_virtual_network_peering.spoke_to_hub.id }
+output "bastion_host_id"           { value = azurerm_bastion_host.bastion.id }
+output "bastion_public_ip"         { value = azurerm_public_ip.bastion_pip.ip_address }
+output "natgw_id" {
+  value = can(azurerm_nat_gateway.natgw[0].id) ? azurerm_nat_gateway.natgw[0].id : null
+}
+output "natgw_public_ip" {
+  value = can(azurerm_public_ip.natgw_pip[0].ip_address) ? azurerm_public_ip.natgw_pip[0].ip_address : null
+}
