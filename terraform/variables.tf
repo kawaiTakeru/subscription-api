@@ -109,10 +109,10 @@ variable "spoke_subscription_id" {
   default     = ""
 }
 
-# Step2: 所有者グループ(admin)に追加するユーザーのメール（UPN）一覧
+# Step2: adminグループに追加するユーザーのメール（UPN）一覧
 # Pipeline から TF_VAR_subscription_owner_emails で JSON 配列が渡されます。
 variable "subscription_owner_emails" {
-  description = "所有者グループに追加するユーザーの UPN 一覧（例: [\"alice@contoso.com\",\"bob@contoso.com\"]）"
+  description = "adminグループに追加するユーザーのUPN一覧（例: [\"alice@contoso.com\",\"bob@contoso.com\"]）"
   type        = list(string)
   default     = []
 }
