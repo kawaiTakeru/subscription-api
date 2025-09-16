@@ -148,16 +148,12 @@ stages:
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
-
-                    # 1) alias リソースのみ作成（azurerm に触れない）
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
-                    # 2) data を単体ターゲットで読み出し
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
-                    # 3) 生成 ID を取得（output → REST フォールバック）
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
@@ -167,7 +163,10 @@ stages:
                       } catch {}
                       if (-not $createdSubId) { $createdSubId = Try-GetSubIdViaAliasIdFromState }
                       if (-not $createdSubId -and $aliasName) { $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName }
-                      if (-not $createdSubId) { Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10 }
+                      if (-not $createdSubId) {
+                        Write-Host "[Step0] Waiting subscriptionId... ($i/36)"
+                        Start-Sleep -Seconds 10
+                      }
                     }
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
@@ -187,12 +186,40 @@ stages:
                   Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
                 } else { throw "create_subscription must be true or false in tfvars." }
 
-                # Hub側のサブスクリプションIDも出力
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-          # Step1: 指定メールアドレスをサブスクリプションのOwnerに付与
+          # Step1: グループ作成（admin/developer/operator）
           - task: AzureCLI@2
-            displayName: Step1 - Assign Owner to subscription (emails)
+            displayName: Step1 - Create AAD groups
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                Push-Location "$(Build.SourcesDirectory)/terraform"
+                try {
+                  terraform init -no-color -input=false
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target azuread_group.group_admin `
+                    -target azuread_group.group_developer `
+                    -target azuread_group.group_operator
+                  if ($LASTEXITCODE -ne 0) { throw "AAD groups creation failed" }
+                } finally { Pop-Location }
+
+          # Step2: メールのユーザーを「所有者グループ（admin）」に追加（ロールは付与しない）
+          - task: AzureCLI@2
+            displayName: Step2 - Add users to admin group
             condition: and(succeeded(), ne('${{ parameters.email }}',''))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
@@ -202,7 +229,6 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # JSON配列で渡してください（例: ["alice@example.com"]）
               TF_VAR_subscription_owner_emails: ${{ parameters.email }}
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
@@ -212,9 +238,8 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
-                az account set --subscription $env:ARM_SUBSCRIPTION_ID
 
-                # 受信値が単一文字列だった場合に JSON 配列へ補正（["x@contoso.com"] 形式）
+                # 単一文字列でも配列に補正
                 $raw = '${{ parameters.email }}'
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
@@ -230,26 +255,15 @@ stages:
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-
-                  # ユーザー解決（見つからない場合は data.azuread_user がエラーで停止）
+                  # ユーザー解決
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azuread_user.subscription_owners
                   if ($LASTEXITCODE -ne 0) { throw "Resolve users failed (check emails and Graph permissions)." }
-
-                  # Owner ロール付与
+                  # グループメンバー追加
                   terraform apply -no-color -input=false -auto-approve `
-                    -target azurerm_role_assignment.subscription_owner
-                  if ($LASTEXITCODE -ne 0) { throw "Assign Owner role failed" }
+                    -target azuread_group_member.owner_group_members
+                  if ($LASTEXITCODE -ne 0) { throw "Add members to admin group failed" }
                 } finally { Pop-Location }
-
-          # Step2: Reserved (skip for future use)
-          - task: PowerShell@2
-            displayName: Step2 - Reserved (skip)
-            condition: and(succeeded(), eq(1, 0))
-            inputs:
-              targetType: inline
-              script: |
-                Write-Host "Reserved step - skipped."
 
           # Step3: PIM（Owner/Contributorのロール管理ポリシー）- 既存グループのみ
           - task: AzureCLI@2
@@ -273,18 +287,14 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
-                az account set --subscription $env:ARM_SUBSCRIPTION_ID
                 Push-Location "$(Build.SourcesDirectory)/terraform"
                 try {
                   terraform init -no-color -input=false
-
-                  # ロール定義読み込み
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azurerm_role_definition.pim_owner_role `
                     -target data.azurerm_role_definition.pim_contributor_role
                   if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
 
-                  # PIM ポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
@@ -596,9 +606,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
                 } finally { Pop-Location }
 
-          # Step10b: Spoke→Hub Peering（プライベート環境のみ）
+          # Step11b: Spoke→Hub Peering（プライベート環境のみ）
           - task: AzureCLI@2
-            displayName: Step10b - Peering Spoke->Hub
+            displayName: Step11b - Peering Spoke->Hub
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
