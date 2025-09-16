@@ -620,9 +620,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
                 } finally { Pop-Location }
 
-          # Step11b: Spoke->Hub Peering（privateのみ）
+          # Step10b: Spoke->Hub Peering（privateのみ）
           - task: AzureCLI@2
-            displayName: Step11b - Peering Spoke->Hub
+            displayName: Step10b - Peering Spoke->Hub
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
