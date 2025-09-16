@@ -252,9 +252,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
                 } finally { Pop-Location }
 
-          # Step1.25: 指定メールアドレスをサブスクリプションのOwnerに付与
+          # Step2: 指定メールアドレスをサブスクリプションのOwnerに付与
           - task: AzureCLI@2
-            displayName: Step1.25 - Assign Owner to subscription (emails)
+            displayName: Step2 - Assign Owner to subscription (emails)
             condition: and(succeeded(), ne('${{ parameters.email }}',''))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
@@ -304,9 +304,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Assign Owner role failed" }
                 } finally { Pop-Location }
 
-          # Step1.5: PIM（Owner/Contributorのロール管理ポリシー）- 既存グループのみ
+          # Step3: PIM（Owner/Contributorのロール管理ポリシー）- 既存グループのみ
           - task: AzureCLI@2
-            displayName: Step1.5 - PIM (Owner/Contributor policies)
+            displayName: Step3 - PIM (Owner/Contributor policies)
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -344,9 +344,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
                 } finally { Pop-Location }
 
-          # Step2: VNet作成
+          # Step4: VNet作成
           - task: AzureCLI@2
-            displayName: Step2 - VNet
+            displayName: Step4 - VNet
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -371,9 +371,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "VNet apply failed" }
                 } finally { Pop-Location }
 
-          # Step3a: サブネット作成
+          # Step5a: サブネット作成
           - task: AzureCLI@2
-            displayName: Step3a - Subnet
+            displayName: Step5a - Subnet
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -400,9 +400,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Subnet apply failed" }
                 } finally { Pop-Location }
 
-          # Step3b: NSG作成
+          # Step5b: NSG作成
           - task: AzureCLI@2
-            displayName: Step3b - NSG
+            displayName: Step5b - NSG
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -429,9 +429,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "NSG apply failed" }
                 } finally { Pop-Location }
 
-          # Step3c: NSGアタッチ
+          # Step5c: NSGアタッチ
           - task: AzureCLI@2
-            displayName: Step3c - NSGアタッチ
+            displayName: Step5c - NSGアタッチ
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -458,9 +458,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "NSG attach apply failed" }
                 } finally { Pop-Location }
 
-          # Step4: プライベート環境のみルートテーブル関連リソース
+          # Step6: プライベート環境のみルートテーブル関連リソース
           - task: AzureCLI@2
-            displayName: Step4 - Route Table (private only)
+            displayName: Step6 - Route Table (private only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
@@ -492,9 +492,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Route table apply failed" }
                 } finally { Pop-Location }
 
-          # Step5: パブリック環境のみNAT Gateway関連リソース
+          # Step7: パブリック環境のみNAT Gateway関連リソース
           - task: AzureCLI@2
-            displayName: Step5 - NAT Gateway (public only)
+            displayName: Step7 - NAT Gateway (public only)
             condition: and(succeeded(), eq(variables['vnet_type'], 'public'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
@@ -530,9 +530,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Subnet NATGW assoc failed" }
                 } finally { Pop-Location }
 
-          # Step6: Bastion構成（全環境共通）
+          # Step7: Bastion構成（全環境共通）
           - task: AzureCLI@2
-            displayName: Step6 - Bastion (all)
+            displayName: Step7 - Bastion (all)
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -559,9 +559,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Bastion Host creation failed" }
                 } finally { Pop-Location }
 
-          # Step7a: Hub→Spoke Peering（プライベート環境のみ）
+          # Step8a: Hub→Spoke Peering（プライベート環境のみ）
           - task: AzureCLI@2
-            displayName: Step7a - Peering Hub->Spoke
+            displayName: Step8a - Peering Hub->Spoke
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
@@ -587,9 +587,9 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "Peering Hub->Spoke apply failed" }
                 } finally { Pop-Location }
 
-          # Step7b: Spoke→Hub Peering（プライベート環境のみ）
+          # Step8b: Spoke→Hub Peering（プライベート環境のみ）
           - task: AzureCLI@2
-            displayName: Step7b - Peering Spoke->Hub
+            displayName: Step8b - Peering Spoke->Hub
             condition: and(succeeded(), eq(variables['vnet_type'], 'private'))
             env:
               ARM_USE_AZCLI_AUTH: 'true'
