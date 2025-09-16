@@ -81,9 +81,7 @@ stages:
                   $val.Trim().Trim('"')
                 }
 
-                function Is-Guid([string]$s) {
-                  return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-                }
+                function Is-Guid([string]$s) { return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }
 
                 function Slugify([string]$s) {
                   if (-not $s) { return "" }
@@ -155,7 +153,7 @@ stages:
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
-                    # 2) data を単体ターゲットで読み出し（refresh-only を使わない）
+                    # 2) data を単体ターゲットで読み出し
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
@@ -169,13 +167,8 @@ stages:
                         if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
 
-                      if (-not $createdSubId) {
-                        $createdSubId = Try-GetSubIdViaAliasIdFromState
-                      }
-
-                      if (-not $createdSubId -and $aliasName) {
-                        $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName
-                      }
+                      if (-not $createdSubId) { $createdSubId = Try-GetSubIdViaAliasIdFromState }
+                      if (-not $createdSubId -and $aliasName) { $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName }
 
                       if (-not $createdSubId) {
                         Write-Host "[Step0] Waiting subscriptionId... ($i/36)"
@@ -185,7 +178,7 @@ stages:
 
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 4) Azure CLI が新規サブスクを認識するまで待機（'not known by Azure CLI' 回避）
+                    # 4) Azure CLI が新規サブスクを認識するまで待機
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -195,16 +188,12 @@ stages:
 
                     Write-Host "Created SubscriptionId: $createdSubId"
                     Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$createdSubId"
-                  } finally {
-                    Pop-Location
-                  }
+                  } finally { Pop-Location }
                 } elseif ($createSub -eq "false") {
                   if (-not $finalSubId) { throw "spoke_subscription_id missing for existing subscription use." }
                   if (-not (Is-Guid $finalSubId)) { throw "spoke_subscription_id must be a GUID. Actual: $finalSubId" }
                   Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
-                } else {
-                  throw "create_subscription must be true or false in tfvars."
-                }
+                } else { throw "create_subscription must be true or false in tfvars." }
 
                 # Hub側のサブスクリプションIDも出力
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
@@ -229,11 +218,9 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
-                # 新規サブスクの認識を明示的に更新してから set
                 az account list --refresh 1>$null
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
 
-                # tfvars/命名関数
                 function Get-TfVar {
                   param([string]$Path,[string]$Key)
                   if (-not (Test-Path $Path)) { return "" }
@@ -294,9 +281,9 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 自動作成を有効にする場合（変数定義が必要）
+              # 自動作成を有効化（既存グループを使う場合は false にし、下の名前指定を使う）
               TF_VAR_pim_auto_create_approver_groups: true
-              # 既存グループを使う場合は上記を false にし、以下を実在の displayName に置き換えて指定
+              # 既存グループ displayName を使う場合の例（必要時のみ有効化）
               # TF_VAR_pim_owner_approver_group_names: '["grp-<proj>-pim-owner-approver-<env>-<region>-<seq>"]'
               # TF_VAR_pim_contributor_approver_group_names: '["grp-<proj>-pim-contributor-approver-<env>-<region>-<seq>"]'
               TF_INPUT: 'false'
@@ -312,25 +299,24 @@ stages:
                 try {
                   terraform init -no-color -input=false
 
-                  # 1) 承認者グループ（必要時のみ作成）
+                  # 1) 承認者グループの作成（必要時のみ）
                   terraform apply -no-color -input=false -auto-approve `
                     -target azuread_group.pim_owner_approver `
                     -target azuread_group.pim_contributor_approver
                   if ($LASTEXITCODE -ne 0) { throw "Approver group creation failed" }
 
-                  # 2) PIMロール定義の読み込み（明示ターゲット）
+                  # 2) ロール定義読み込みを先に適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azurerm_role_definition.pim_owner_role `
                     -target data.azurerm_role_definition.pim_contributor_role
                   if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
 
-                  # 3) PIMポリシー適用
+                  # 3) PIM ポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
                   if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
                 } finally { Pop-Location }
-
           # Step2: VNet作成
           - task: AzureCLI@2
             displayName: Step2 - VNet
