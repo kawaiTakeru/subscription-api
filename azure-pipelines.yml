@@ -70,9 +70,7 @@ stages:
               inlineScript: |
                 $ErrorActionPreference='Stop'
                 $tfDir = "$(Build.SourcesDirectory)/terraform"
-
-                function Get-TfVar {
-                  param([string]$Path,[string]$Key)
+                function Get-TfVar {[CmdletBinding()]param([string]$Path,[string]$Key)
                   if (-not (Test-Path $Path)) { throw "tfvars not found: $Path" }
                   $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
                   if (-not $line) { return "" }
@@ -80,26 +78,13 @@ stages:
                   if ($val -match "#") { $val = ($val -split "#")[0] }
                   $val.Trim().Trim('"')
                 }
-
-                function Is-Guid([string]$s) { return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }
-
-                function Slugify([string]$s) {
-                  if (-not $s) { return "" }
-                  $t = $s.Trim().ToLower()
-                  $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
-                  $t = $t -replace "[^0-9a-z\-]", "-"
-                  return $t.Trim("-")
+                function Is-Guid([string]$s){ return $s -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }
+                function Slugify([string]$s){ if (-not $s) { return "" }; $t=$s.Trim().ToLower(); $t=$t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"; $t=$t -replace "[^0-9a-z\-]", "-"; return $t.Trim("-") }
+                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq){
+                  $p1=Slugify $project; $p2raw=Slugify $purpose; $p2= if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
+                  $parts=@($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }; return ($parts -join "-")
                 }
-
-                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
-                  $p1 = Slugify $project
-                  $p2raw = Slugify $purpose
-                  $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
-                  $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-                  return ($parts -join "-")
-                }
-
-                function Get-AliasName($tfvarsPath) {
+                function Get-AliasName($tfvarsPath){
                   $explicit = Get-TfVar $tfvarsPath "subscription_alias_name"
                   if ($explicit) { return $explicit }
                   $projectParam = "${{ parameters.project_name }}"
@@ -111,7 +96,6 @@ stages:
                   if (-not $base) { throw "cannot build alias base (check tfvars: purpose_name/region_code/sequence)" }
                   return "alias-$base"
                 }
-
                 function Get-AliasStateField([string]$field){
                   $out = terraform state show azapi_resource.subscription[0] 2>$null
                   if (-not $out) { return $null }
@@ -119,7 +103,6 @@ stages:
                   if ($m) { return $m.Matches[0].Groups[1].Value }
                   return $null
                 }
-
                 function Try-GetSubIdViaAliasIdFromState {
                   $aliasId = Get-AliasStateField "id"
                   if (-not $aliasId) { return $null }
@@ -128,19 +111,15 @@ stages:
                   if ($sid -and (Is-Guid $sid)) { return $sid }
                   return $null
                 }
-
                 function Try-GetSubIdViaAliasName([string]$aliasName) {
                   $uri = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01"
                   $sid = az rest --method get --uri $uri --query "properties.subscriptionId" -o tsv 2>$null
                   if ($sid -and (Is-Guid $sid)) { return $sid }
                   return $null
                 }
-
-                # ===== 変数取得 =====
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
                 $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
                 if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
-
                 $createSub = Get-TfVar $tfvars "create_subscription"
                 $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
 
@@ -148,37 +127,24 @@ stages:
                   Push-Location $tfDir
                   try {
                     terraform init -no-color -input=false
-
-                    # 1) alias リソースのみ作成（azurerm に触れない）
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
-
-                    # 2) data を単体ターゲットで読み出し
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
-                    # 3) 生成 ID を取得（output → REST フォールバック）
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
-
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
                       try {
                         $raw = terraform output -raw created_subscription_id 2>$null
                         if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
-
                       if (-not $createdSubId) { $createdSubId = Try-GetSubIdViaAliasIdFromState }
                       if (-not $createdSubId -and $aliasName) { $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName }
-
-                      if (-not $createdSubId) {
-                        Write-Host "[Step0] Waiting subscriptionId... ($i/36)"
-                        Start-Sleep -Seconds 10
-                      }
+                      if (-not $createdSubId) { Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10 }
                     }
-
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
-                    # 4) Azure CLI が新規サブスクを認識するまで待機
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -195,9 +161,7 @@ stages:
                   Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
                 } else { throw "create_subscription must be true or false in tfvars." }
 
-                # Hub側のサブスクリプションIDも出力
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
-
 
           # Step1: リソースグループ作成
           - task: AzureCLI@2
@@ -220,9 +184,7 @@ stages:
                 $ErrorActionPreference='Stop'
                 az account list --refresh 1>$null
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
-
-                function Get-TfVar {
-                  param([string]$Path,[string]$Key)
+                function Get-TfVar {[CmdletBinding()]param([string]$Path,[string]$Key)
                   if (-not (Test-Path $Path)) { return "" }
                   $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
                   if (-not $line) { return "" }
@@ -230,19 +192,10 @@ stages:
                   if ($val -match "#") { $val = ($val -split "#")[0] }
                   $val.Trim().Trim('"')
                 }
-                function Slugify([string]$s) {
-                  if (-not $s) { return "" }
-                  $t = $s.Trim().ToLower()
-                  $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
-                  $t = $t -replace "[^0-9a-z\-]", "-"
-                  return $t.Trim("-")
-                }
-                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
-                  $p1 = Slugify $project
-                  $p2raw = Slugify $purpose
-                  $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
-                  $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-                  return ($parts -join "-")
+                function Slugify([string]$s){ if (-not $s) { return "" }; $t=$s.Trim().ToLower(); $t=$t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"; $t=$t -replace "[^0-9a-z\-]", "-"; return $t.Trim("-") }
+                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq){
+                  $p1=Slugify $project; $p2raw=Slugify $purpose; $p2= if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
+                  $parts=@($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }; return ($parts -join "-")
                 }
                 $tfDir = "$(Build.SourcesDirectory)/terraform"
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
@@ -270,6 +223,60 @@ stages:
                   if ($LASTEXITCODE -ne 0) { throw "RG apply failed" }
                 } finally { Pop-Location }
 
+          # Step1.25: 指定メールアドレスをサブスクリプションのOwnerに付与
+          - task: AzureCLI@2
+            displayName: Step1.25 - Assign Owner to subscription (emails)
+            condition: and(succeeded(), ne('${{ parameters.email }}',''))
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: ${{ parameters.vnet_type }}
+              # JSON配列で渡してください（例: ["alice@example.com"]）
+              TF_VAR_subscription_owner_emails: ${{ parameters.email }}
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+
+                # 受信値が単一文字列だった場合に JSON 配列へ補正（["x@contoso.com"] 形式）
+                $raw = '${{ parameters.email }}'
+                if ($raw -and $raw.Trim() -ne "") {
+                  try {
+                    $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
+                    if ($tmp -isnot [System.Array]) {
+                      # 配列でなければ配列化
+                      $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                    }
+                  } catch {
+                    # JSONとして解釈できなければ配列化
+                    $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                  }
+                }
+
+                Push-Location "$(Build.SourcesDirectory)/terraform"
+                try {
+                  terraform init -no-color -input=false
+
+                  # ユーザー解決（見つからない場合は data.azuread_user がエラーで停止）
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target data.azuread_user.subscription_owners
+                  if ($LASTEXITCODE -ne 0) { throw "Resolve users failed (check emails and Graph permissions)." }
+
+                  # Owner ロール付与
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target azurerm_role_assignment.subscription_owner
+                  if ($LASTEXITCODE -ne 0) { throw "Assign Owner role failed" }
+                } finally { Pop-Location }
+
           # Step1.5: PIM（Owner/Contributorのロール管理ポリシー）
           - task: AzureCLI@2
             displayName: Step1.5 - PIM (Owner/Contributor policies)
@@ -281,9 +288,11 @@ stages:
               TF_VAR_project_name: ${{ parameters.project_name }}
               TF_VAR_environment_id: ${{ parameters.environment_id }}
               TF_VAR_vnet_type: ${{ parameters.vnet_type }}
-              # 既存グループを使用（自動作成は無効化）
-              TF_VAR_pim_owner_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
-              TF_VAR_pim_contributor_approver_group_names: '["ot-oprt-is-manager","ot-oprt-is-general","ot-oprt-is-director"]'
+              # 自動作成を有効化（既存グループを使う場合は false にし、下の名前指定を使う）
+              TF_VAR_pim_auto_create_approver_groups: true
+              # 既存グループ displayName を使う場合の例（必要時のみ有効化）
+              # TF_VAR_pim_owner_approver_group_names: '["grp-<proj>-pim-owner-approver-<env>-<region>-<seq>"]'
+              # TF_VAR_pim_contributor_approver_group_names: '["grp-<proj>-pim-contributor-approver-<env>-<region>-<seq>"]'
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
             inputs:
@@ -297,18 +306,25 @@ stages:
                 try {
                   terraform init -no-color -input=false
 
-                  # 1) ロール定義読み込み
+                  # 1) 承認者グループの作成（必要時のみ）
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target azuread_group.pim_owner_approver `
+                    -target azuread_group.pim_contributor_approver
+                  if ($LASTEXITCODE -ne 0) { throw "Approver group creation failed" }
+
+                  # 2) ロール定義読み込みを先に適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target data.azurerm_role_definition.pim_owner_role `
                     -target data.azurerm_role_definition.pim_contributor_role
                   if ($LASTEXITCODE -ne 0) { throw "Read role definitions failed" }
 
-                  # 2) PIM ポリシー適用
+                  # 3) PIM ポリシー適用
                   terraform apply -no-color -input=false -auto-approve `
                     -target azurerm_role_management_policy.pim_owner_role_rules `
                     -target azurerm_role_management_policy.pim_contributor_role_rules
                   if ($LASTEXITCODE -ne 0) { throw "PIM apply failed" }
                 } finally { Pop-Location }
+
           # Step2: VNet作成
           - task: AzureCLI@2
             displayName: Step2 - VNet
