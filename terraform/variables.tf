@@ -215,36 +215,36 @@ variable "allowed_port" {
   default     = 3389
 }
 
-# -----------------------------------------------------------
-# PIM 承認者グループ（任意指定。未指定時は命名規約で既定名を使用）
-# 命名規約:
-# grp-<PJ/案件名>-<pim-owner-approver|-pim-contributor-approver>-<環境識別子>-<リージョン略号>-<識別番号>
-# 例) grp-bft-pim-owner-approver-dev-jpe-001
-# -----------------------------------------------------------
+# --- PIM 承認者グループ自動作成フラグ ---
+variable "pim_auto_create_approver_groups" {
+  description = "PIM 承認者グループを命名規則で自動作成するか"
+  type        = bool
+  default     = false
+}
+
+# --- 既存グループ displayName 指定（指定時は自動作成より優先） ---
 variable "pim_owner_approver_group_names" {
-  description = "PIM(Owner)の承認者に設定する Azure AD セキュリティグループ displayName 一覧（未指定時は命名規約で1件生成）"
+  description = "PIM(Owner)の承認者に設定するグループ displayName 一覧"
   type        = list(string)
   default     = []
 }
-
 variable "pim_contributor_approver_group_names" {
-  description = "PIM(Contributor)の承認者に設定する Azure AD セキュリティグループ displayName 一覧（未指定時は命名規約で1件生成）"
+  description = "PIM(Contributor)の承認者に設定するグループ displayName 一覧"
   type        = list(string)
   default     = []
 }
 
+# --- 命名トークン（必要に応じて変更可能） ---
 variable "pim_group_prefix" {
   description = "承認者グループのプレフィックス"
   type        = string
   default     = "grp"
 }
-
 variable "pim_group_role_token_owner" {
   description = "Owner承認者グループのロールトークン"
   type        = string
   default     = "pim-owner-approver"
 }
-
 variable "pim_group_role_token_contributor" {
   description = "Contributor承認者グループのロールトークン"
   type        = string
