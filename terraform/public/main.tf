@@ -504,11 +504,10 @@ output "vnet_expected_name"        { value = local.name_vnet }
 output "subscription_id"           { value = local.effective_spoke_subscription_id != "" ? local.effective_spoke_subscription_id : null }
 output "spoke_rg_name"             { value = module.step4_resource_group.rg_name }
 output "spoke_vnet_name"           { value = module.step5_vnet.vnet_name }
-output "hub_to_spoke_peering_id"   { value = module.vnet-peering.hub_to_spoke_peering_id }
-output "spoke_to_hub_peering_id"   { value = module.vnet-peering.spoke_to_hub_peering_id }
 #output "bastion_host_id"           { value = module.bastion.bastion_host_id }
 #output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
 output "natgw_id"                  { value = module.nat-gateway.natgw_id }
 output "natgw_public_ip"           { value = module.nat-gateway.natgw_public_ip }
+
 
 
