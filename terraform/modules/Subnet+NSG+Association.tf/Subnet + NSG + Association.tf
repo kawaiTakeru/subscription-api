@@ -296,10 +296,13 @@ resource "azurerm_network_security_rule" "subnet_rules" {
   source_address_prefix       = each.value.source_address_prefix
 
   # 重要: "BASTION_SUBNET" は Bastion サブネットの実CIDRに置換
+  # 単一値フィールド/配列フィールドを正しく使い分けて null index を回避
   destination_address_prefix  = (
-    each.value.destination_address_prefix == "BASTION_SUBNET"
-    ? azurerm_subnet.bastion_subnet.address_prefixes[0]
-    : each.value.destination_address_prefix
+    each.value.destination_address_prefix == "BASTION_SUBNET" ? null : each.value.destination_address_prefix
+  )
+
+  destination_address_prefixes = (
+    each.value.destination_address_prefix == "BASTION_SUBNET" ? azurerm_subnet.bastion_subnet.address_prefixes : null
   )
 
   description                 = try(each.value.description, null)
