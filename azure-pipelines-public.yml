@@ -186,9 +186,9 @@ stages:
 
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-          # Step1: 対応ディレクトリで main.tf を一括適用
+          # Step1: 依存基盤（RG/VNet/Subnets/NSGs/Association）を先行適用
           - task: AzureCLI@2
-            displayName: Step1 - Terraform apply (public)
+            displayName: Step1 - Target apply (RG/VNet/Subnets/NSGs)
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -207,7 +207,7 @@ stages:
               inlineScript: |
                 $ErrorActionPreference='Stop'
 
-                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正して TF_VAR_* に設定
+                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正
                 $raw = '${{ parameters.email }}'
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
@@ -226,9 +226,66 @@ stages:
                 Push-Location "$(tfWorkingDir)"
                 try {
                   terraform init -no-color -input=false
-                  terraform plan -no-color -input=false -out=tfplan
-                  if ($LASTEXITCODE -ne 0) { throw "Terraform plan failed" }
-
-                  terraform apply -no-color -input=false -auto-approve tfplan
-                  if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target="module.groups.azuread_group.admin" `
+                    -target="module.groups.azuread_group.developer" `
+                    -target="module.groups.azuread_group.operator" `
+                    -target="module.groups.azurerm_role_assignment.rg_owner_admin" `
+                    -target="module.groups.azuread_group_member.admin_members" `
+                    -target="module.resource_group.azurerm_resource_group.rg" `
+                    -target="module.vnet.azurerm_virtual_network.vnet" `
+                    -target="module.networking.azurerm_subnet.bastion_subnet" `
+                    -target="module.networking.azurerm_subnet.subnet" `
+                    -target="module.networking.azurerm_network_security_group.subnet_nsg" `
+                    -target="module.networking.azurerm_network_security_group.bastion_nsg" `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowGatewayManagerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowAzureLoadBalancerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowBastionHostCommunication"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowHttpsInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowGatewayManagerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowAzureLoadBalancerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowBastionHostCommunication"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowSshRdpOutbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowAzureCloudOutbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowBastionCommunication"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowHttpOutbound"]' `
+                    -target="module.networking.azurerm_subnet_network_security_group_association.subnet_assoc" `
+                    -target="module.networking.azurerm_subnet_network_security_group_association.bastion_assoc" `
+                    -target="module.bastion.azurerm_public_ip.bastion_pip" `
+                    -target="module.bastion.azurerm_bastion_host.bastion" `
+                    -target="module.nat-gateway.azurerm_public_ip.natgw_pip" `
+                    -target="module.nat-gateway.azurerm_nat_gateway.natgw" `
+                    -target="module.nat-gateway.azurerm_nat_gateway_public_ip_association.natgw_pip_assoc" `
+                    -target="module.nat-gateway.azurerm_subnet_nat_gateway_association.subnet_natgw_assoc"
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform target apply (infra base) failed" }
                 } finally { Pop-Location }
+
+          # Step2: 問題の NSG ルールのみ先行適用（AllowBastionInbound）
+          - task: AzureCLI@2
+            displayName: Step2 - Target apply (NSG rule:AllowBastionInbound)
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+                Push-Location "$(tfWorkingDir)"
+                try {
+                  terraform init -no-color -input=false
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowBastionInbound"]'
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform target apply (NSG rule patch) failed" }
+                } finally { Pop-Location }
+
