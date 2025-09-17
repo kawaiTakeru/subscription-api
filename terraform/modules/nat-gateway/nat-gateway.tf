@@ -2,9 +2,6 @@
 # 変数定義
 # ===========================================================
 
-# -----------------------------------------------------------
-# サブスクリプション・命名規約関連（Stage0相当）
-# -----------------------------------------------------------
 variable "environment_id" {
   description = "環境識別子（例: prd, stg, dev）"
   type        = string
@@ -23,22 +20,10 @@ variable "sequence" {
   default     = "001"
 }
 
-# -----------------------------------------------------------
-variable "project_slug" {
-  type        = string
-}
-
-variable "resource_group_location" {
-  type        = string
-}
-
-variable "resource_group_name" {
-  type        = string
-}
-
-variable "subnet_id" {
-  type        = string
-}
+variable "project_slug"             { type = string }
+variable "resource_group_location"  { type = string }
+variable "resource_group_name"      { type = string }
+variable "subnet_id"                { type = string }
 
 # ===========================================================
 # providers
@@ -59,13 +44,12 @@ terraform {
 # locals
 # ===========================================================
 locals {
-  name_natgw               = var.project_slug != "" ? "ng-${var.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_pip           = var.project_slug != "" ? "ng-${var.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_prefix        = var.project_slug != "" ? "ng-${var.project_slug}-prefix-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw     = var.project_slug != "" ? "ng-${var.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_pip = var.project_slug != "" ? "ng-${var.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 }
 
 # -----------------------------------------------------------
-# NAT Gateway構成（パブリック環境のみ）
+# NAT Gateway（Public IP Prefixは作成しない）
 # -----------------------------------------------------------
 resource "azurerm_public_ip" "natgw_pip" {
   provider            = azurerm
@@ -76,16 +60,6 @@ resource "azurerm_public_ip" "natgw_pip" {
   allocation_method = "Static"
   sku               = "Standard"
   ip_version        = "IPv4"
-}
-
-resource "azurerm_public_ip_prefix" "natgw_prefix" {
-  provider            = azurerm
-  name                = local.name_natgw_prefix
-  location            = var.resource_group_location
-  resource_group_name = var.resource_group_name
-
-  prefix_length = 30
-  sku           = "Standard"
 }
 
 resource "azurerm_nat_gateway" "natgw" {
@@ -104,12 +78,6 @@ resource "azurerm_nat_gateway_public_ip_association" "natgw_pip_assoc" {
   public_ip_address_id = azurerm_public_ip.natgw_pip.id
 }
 
-resource "azurerm_nat_gateway_public_ip_prefix_association" "natgw_prefix_assoc" {
-  provider            = azurerm
-  nat_gateway_id      = azurerm_nat_gateway.natgw.id
-  public_ip_prefix_id = azurerm_public_ip_prefix.natgw_prefix.id
-}
-
 resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
   provider       = azurerm
   subnet_id      = var.subnet_id
@@ -119,5 +87,5 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
 # -----------------------------------------------------------
 # Outputs（デバッグ・確認用）
 # -----------------------------------------------------------
-output "natgw_id"                  { value = azurerm_nat_gateway.natgw.id }
-output "natgw_public_ip"           { value = azurerm_public_ip.natgw_pip.ip_address }
+output "natgw_id"        { value = azurerm_nat_gateway.natgw.id }
+output "natgw_public_ip" { value = azurerm_public_ip.natgw_pip.ip_address }
