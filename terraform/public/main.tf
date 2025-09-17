@@ -463,23 +463,6 @@ module "nat-gateway" {
   subnet_id = module.step6_networking.subnet_id
 }
 
-# -----------------------------------------------------------
-# VNet Peering（Hub⇔Spoke）
-# -----------------------------------------------------------
-module "vnet-peering" {
-  source = "../modules/vnet-peering"
-  providers = {
-    azurerm.spoke = azurerm.spoke
-    azurerm.hub = azurerm.hub
-  }
-  effective_spoke_subscription_id = local.effective_spoke_subscription_id
-  hub_subscription_id = var.hub_subscription_id
-  hub_vnet_name = var.hub_vnet_name
-  hub_rg_name = var.hub_rg_name
-  base = local.base
-
-  depends_on = [module.step5_vnet]
-}
 
 # -----------------------------------------------------------
 # PIM設定（Owner / Contributor）- 既存グループのみ使用
@@ -523,8 +506,9 @@ output "spoke_rg_name"             { value = module.step4_resource_group.rg_name
 output "spoke_vnet_name"           { value = module.step5_vnet.vnet_name }
 output "hub_to_spoke_peering_id"   { value = module.vnet-peering.hub_to_spoke_peering_id }
 output "spoke_to_hub_peering_id"   { value = module.vnet-peering.spoke_to_hub_peering_id }
-output "bastion_host_id"           { value = module.bastion.bastion_host_id }
-output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
+#output "bastion_host_id"           { value = module.bastion.bastion_host_id }
+#output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
 output "natgw_id"                  { value = module.nat-gateway.natgw_id }
 output "natgw_public_ip"           { value = module.nat-gateway.natgw_public_ip }
+
 
