@@ -45,7 +45,7 @@ terraform {
 # ===========================================================
 locals {
   name_natgw     = var.project_slug != "" ? "ng-${var.project_slug}-nat-${var.environment_id}-${var.region_code}-${var.sequence}" : null
-  name_natgw_pip = var.project_slug != "" ? "ng-${var.project_slug}-pip-${var.environment_id}-${var.region_code}-${var.sequence}" : null
+  name_natgw_pip = var.project_slug != "" ? "pip-${var.project_slug}-ng-${var.environment_id}-${var.region_code}-${var.sequence}" : null
 }
 
 # -----------------------------------------------------------
@@ -89,3 +89,4 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
 # -----------------------------------------------------------
 output "natgw_id"        { value = azurerm_nat_gateway.natgw.id }
 output "natgw_public_ip" { value = azurerm_public_ip.natgw_pip.ip_address }
+
