@@ -433,20 +433,18 @@ module "step6_networking" {
 # -----------------------------------------------------------
 # Bastion Host
 # -----------------------------------------------------------
-module "bastion" {
-  source = "../modules/bastion"
-  providers = {
-    azurerm = azurerm.spoke
-  }
-  environment_id = var.environment_id
-  region_code = var.region_code
-  sequence = var.sequence
-  vnet_type = local.vnet_type
-  project_slug = local.project_slug
-  resource_group_location = module.step4_resource_group.rg_location
-  resource_group_name = module.step4_resource_group.rg_name
-  bastion_subnet_id = module.step6_networking.bastion_subnet_id
-}
+# module "bastion" {
+#   source = "../modules/bastion"
+#   providers = { azurerm = azurerm.spoke }
+#   environment_id          = var.environment_id
+#   region_code             = var.region_code
+#   sequence                = var.sequence
+#   vnet_type               = local.vnet_type
+#   project_slug            = local.project_slug
+#   resource_group_location = module.step4_resource_group.rg_location
+#   resource_group_name     = module.step4_resource_group.rg_name
+#   bastion_subnet_id       = module.step6_networking.bastion_subnet_id
+# }
 
 # -----------------------------------------------------------
 # NAT Gateway構成（パブリック環境のみ）
@@ -529,3 +527,4 @@ output "bastion_host_id"           { value = module.bastion.bastion_host_id }
 output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
 output "natgw_id"                  { value = module.nat-gateway.natgw_id }
 output "natgw_public_ip"           { value = module.nat-gateway.natgw_public_ip }
+
