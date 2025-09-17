@@ -49,7 +49,7 @@ locals {
 }
 
 # -----------------------------------------------------------
-# NAT Gateway（Public IP Prefixは作成しない）
+# NAT Gateway
 # -----------------------------------------------------------
 resource "azurerm_public_ip" "natgw_pip" {
   provider            = azurerm
@@ -89,4 +89,5 @@ resource "azurerm_subnet_nat_gateway_association" "subnet_natgw_assoc" {
 # -----------------------------------------------------------
 output "natgw_id"        { value = azurerm_nat_gateway.natgw.id }
 output "natgw_public_ip" { value = azurerm_public_ip.natgw_pip.ip_address }
+
 
