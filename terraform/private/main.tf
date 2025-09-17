@@ -433,20 +433,18 @@ module "step6_networking" {
 # -----------------------------------------------------------
 # Bastion Host
 # -----------------------------------------------------------
-module "bastion" {
-  source = "../modules/bastion"
-  providers = {
-    azurerm = azurerm.spoke
-  }
-  environment_id = var.environment_id
-  region_code = var.region_code
-  sequence = var.sequence
-  vnet_type = local.vnet_type
-  project_slug = local.project_slug
-  resource_group_location = module.step4_resource_group.rg_location
-  resource_group_name = module.step4_resource_group.rg_name
-  bastion_subnet_id = module.step6_networking.bastion_subnet_id
-}
+# module "bastion" {
+#   source = "../modules/bastion"
+#   providers = { azurerm = azurerm.spoke }
+#   environment_id          = var.environment_id
+#   region_code             = var.region_code
+#   sequence                = var.sequence
+#   vnet_type               = local.vnet_type
+#   project_slug            = local.project_slug
+#   resource_group_location = module.step4_resource_group.rg_location
+#   resource_group_name     = module.step4_resource_group.rg_name
+#   bastion_subnet_id       = module.step6_networking.bastion_subnet_id
+# }
 
 # -----------------------------------------------------------
 # ルートテーブル・ルート（プライベート環境のみ）
@@ -526,5 +524,6 @@ output "spoke_rg_name"             { value = module.step4_resource_group.rg_name
 output "spoke_vnet_name"           { value = module.step5_vnet.vnet_name }
 output "hub_to_spoke_peering_id"   { value = module.vnet-peering.hub_to_spoke_peering_id }
 output "spoke_to_hub_peering_id"   { value = module.vnet-peering.spoke_to_hub_peering_id }
-output "bastion_host_id"           { value = module.bastion.bastion_host_id }
-output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
+#output "bastion_host_id"           { value = module.bastion.bastion_host_id }
+#output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
+
