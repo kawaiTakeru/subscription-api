@@ -81,166 +81,6 @@ locals {
     var.invoice_section_name != ""
   ) ? "/providers/Microsoft.Billing/billingAccounts/${var.billing_account_name}/billingProfiles/${var.billing_profile_name}/invoiceSections/${var.invoice_section_name}" : null
 
-  # --- Public Subnet NSGルール ---
-  public_subnet_nsg_rules = [
-    {
-      name                       = "AllowBastionInbound"
-      priority                   = 100
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["3389", "22"]
-      source_address_prefix      = "*"
-      destination_address_prefix = "BASTION_SUBNET"
-      description                = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name                       = "AllowGatewayManagerInbound"
-      priority                   = 110
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "GatewayManager"
-      destination_address_prefix = "*"
-      description                = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name                       = "AllowAzureLoadBalancerInbound"
-      priority                   = 120
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "AzureLoadBalancer"
-      destination_address_prefix = "*"
-      description                = "Bastionの利用に必要な設定を追加"
-    },
-    {
-      name                       = "AllowBastionHostCommunication"
-      priority                   = 130
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "*"
-      source_port_range          = "*"
-      destination_port_ranges    = ["8080", "5701"]
-      source_address_prefix      = "VirtualNetwork"
-      destination_address_prefix = "VirtualNetwork"
-      description                = "Bastionの利用に必要な設定を追加"
-    }
-  ]
-
-  # --- Public Bastion NSGルール ---
-  public_bastion_nsg_rules = [
-    {
-      name                       = "AllowHttpsInbound"
-      priority                   = 100
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "Internet"
-      destination_address_prefix = "*"
-    },
-    {
-      name                       = "AllowGatewayManagerInbound"
-      priority                   = 110
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "GatewayManager"
-      destination_address_prefix = "*"
-    },
-    {
-      name                       = "AllowAzureLoadBalancerInbound"
-      priority                   = 120
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "AzureLoadBalancer"
-      destination_address_prefix = "*"
-    },
-    {
-      name                       = "AllowBastionHostCommunication"
-      priority                   = 130
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "*"
-      source_port_range          = "*"
-      destination_port_ranges    = ["8080", "5701"]
-      source_address_prefix      = "VirtualNetwork"
-      destination_address_prefix = "VirtualNetwork"
-    },
-    # 送信ルール
-    {
-      name                       = "AllowSshRdpOutbound"
-      priority                   = 100
-      direction                  = "Outbound"
-      access                     = "Allow"
-      protocol                   = "*"
-      source_port_range          = "*"
-      destination_port_ranges    = ["22", "3389"]
-      source_address_prefix      = "*"
-      destination_address_prefix = "VirtualNetwork"
-    },
-    {
-      name                       = "AllowAzureCloudOutbound"
-      priority                   = 110
-      direction                  = "Outbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["443"]
-      source_address_prefix      = "*"
-      destination_address_prefix = "AzureCloud"
-    },
-    {
-      name                       = "AllowBastionCommunication"
-      priority                   = 120
-      direction                  = "Outbound"
-      access                     = "Allow"
-      protocol                   = "*"
-      source_port_range          = "*"
-      destination_port_ranges    = ["8080", "5701"]
-      source_address_prefix      = "VirtualNetwork"
-      destination_address_prefix = "VirtualNetwork"
-    },
-    {
-      name                       = "AllowHttpOutbound"
-      priority                   = 130
-      direction                  = "Outbound"
-      access                     = "Allow"
-      protocol                   = "*"
-      source_port_range          = "*"
-      destination_port_ranges    = ["80"]
-      source_address_prefix      = "*"
-      destination_address_prefix = "Internet"
-    }
-  ]
-
-  # --- Private Subnet NSGルール ---
-  private_subnet_nsg_rules = [
-    {
-      name                       = "AllowBastionInbound"
-      priority                   = 100
-      direction                  = "Inbound"
-      access                     = "Allow"
-      protocol                   = "Tcp"
-      source_port_range          = "*"
-      destination_port_ranges    = ["3389", "22"]
-      source_address_prefix      = "219.54.131.37/32"
-      destination_address_prefix = "BASTION_SUBNET"
-      description                = "Bastionの利用に必要な設定を追加"
-    }
-  ]
 
   # --- Private Bastion NSGルール ---
   private_bastion_nsg_rules = [
@@ -433,18 +273,18 @@ module "step6_networking" {
 # -----------------------------------------------------------
 # Bastion Host
 # -----------------------------------------------------------
-# module "bastion" {
-#   source = "../modules/bastion"
-#   providers = { azurerm = azurerm.spoke }
-#   environment_id          = var.environment_id
-#   region_code             = var.region_code
-#   sequence                = var.sequence
-#   vnet_type               = local.vnet_type
-#   project_slug            = local.project_slug
-#   resource_group_location = module.step4_resource_group.rg_location
-#   resource_group_name     = module.step4_resource_group.rg_name
-#   bastion_subnet_id       = module.step6_networking.bastion_subnet_id
-# }
+module "bastion" {
+   source = "../modules/bastion"
+   providers = { azurerm = azurerm.spoke }
+   environment_id          = var.environment_id
+   region_code             = var.region_code
+   sequence                = var.sequence
+   vnet_type               = local.vnet_type
+   project_slug            = local.project_slug
+   resource_group_location = module.step4_resource_group.rg_location
+   resource_group_name     = module.step4_resource_group.rg_name
+   bastion_subnet_id       = module.step6_networking.bastion_subnet_id
+ }
 
 # -----------------------------------------------------------
 # ルートテーブル・ルート（プライベート環境のみ）
@@ -498,7 +338,7 @@ module "pim" {
   tenant_id = var.spoke_tenant_id
 }
 
-# ★ created_subscription_id：既存なら var を、作成なら data/resource を jsondecode して GUID を返す
+# created_subscription_id：既存なら var を、作成なら data/resource を jsondecode して GUID を返す
 output "created_subscription_id" {
   description = "Spoke subscription id (newly created or reused)."
   value = coalesce(
@@ -524,6 +364,7 @@ output "spoke_rg_name"             { value = module.step4_resource_group.rg_name
 output "spoke_vnet_name"           { value = module.step5_vnet.vnet_name }
 output "hub_to_spoke_peering_id"   { value = module.vnet-peering.hub_to_spoke_peering_id }
 output "spoke_to_hub_peering_id"   { value = module.vnet-peering.spoke_to_hub_peering_id }
-#output "bastion_host_id"           { value = module.bastion.bastion_host_id }
-#output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
+output "bastion_host_id"           { value = module.bastion.bastion_host_id }
+output "bastion_public_ip"         { value = module.bastion.bastion_public_ip }
+
 
