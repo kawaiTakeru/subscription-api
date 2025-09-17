@@ -207,17 +207,18 @@ stages:
 
                 # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正
                 $raw = '${{ parameters.email }}'
-                if ($raw -and $raw.Trim() -ne "") {
-                  try {
-                    $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
-                    if ($tmp -isnot [System.Array]) {
-                      $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
-                    } else {
-                      $env:TF_VAR_subscription_owner_emails = $raw
-                    }
-                  } catch {
+                if (-not $raw -or $raw.Trim() -eq "") { throw "email parameter is required (non-empty)." }
+                try {
+                  $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
+                  if ($tmp -is [System.Array]) {
+                    if ($tmp.Count -le 0) { throw "email parameter must contain at least one address." }
+                    $env:TF_VAR_subscription_owner_emails = $raw
+                  } else {
                     $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
                   }
+                } catch {
+                  # 単一文字列として扱う
+                  $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
                 }
 
                 az account set --subscription $env:ARM_SUBSCRIPTION_ID
@@ -236,9 +237,8 @@ stages:
                     -target="module.networking.azurerm_subnet.subnet" `
                     -target="module.networking.azurerm_network_security_group.subnet_nsg" `
                     -target="module.networking.azurerm_network_security_group.bastion_nsg" `
-                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowGatewayManagerInbound"]' `
-                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowAzureLoadBalancerInbound"]' `
-                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowBastionHostCommunication"]' `
+                    # private 環境では subnet_rules 側は問題ルール(AllowBastionInbound)のみのため Step2 で適用
+                    # bastion_rules は private 名称に合わせて適用
                     -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowInbound"]' `
                     -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowGatewayManager"]' `
                     -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowAzureLoadBalancer"]' `
