@@ -237,8 +237,8 @@ resource "azurerm_subnet" "bastion_subnet" {
   }
 }
 
-output "subnet_id"            { value = azurerm_subnet.subnet.id }
-output "bastion_subnet_id"    { value = azurerm_subnet.bastion_subnet.id }
+output "subnet_id"             { value = azurerm_subnet.subnet.id }
+output "bastion_subnet_id"     { value = azurerm_subnet.bastion_subnet.id }
 output "bastion_subnet_prefix" { value = try(azurerm_subnet.bastion_subnet.address_prefixes[0], null) }
 
 # ---------------------------
@@ -273,16 +273,16 @@ resource "azurerm_network_security_rule" "subnet_rules" {
   access                      = each.value.access
   protocol                    = each.value.protocol
 
-  # Use single vs multiple fields exclusively
   source_port_range           = each.value.source_port_range
   destination_port_range      = length(each.value.destination_port_ranges) == 1 ? each.value.destination_port_ranges[0] : null
   destination_port_ranges     = length(each.value.destination_port_ranges) > 1  ? each.value.destination_port_ranges    : null
 
-  # Address prefixes (single only; do not set *_prefixes)
   source_address_prefix       = each.value.source_address_prefix
+
+  # 重要: "BASTION_SUBNET" は常に "VirtualNetwork" に固定（computed な CIDR を参照しない）
   destination_address_prefix  = (
     each.value.destination_address_prefix == "BASTION_SUBNET"
-    ? try(azurerm_subnet.bastion_subnet.address_prefixes[0], "VirtualNetwork")
+    ? "VirtualNetwork"
     : each.value.destination_address_prefix
   )
 
