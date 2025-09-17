@@ -117,11 +117,8 @@ data "azapi_resource" "subscription_get" {
 }
 
 # -----------------------------------------------------------
-# 管理用グループ作成（サブスクリプション毎に3グループ）
-# メール（UPN）からユーザー解決 → 所有者グループ（admin）にメンバー追加
-# 3グループへサブスクリプションRBAC割り当て
+# 管理用グループ作成
 # -----------------------------------------------------------
-# Step1+2: Groups + Roles unified
 module "step1_2_groups_roles" {
   source     = "../modules/groups"
   providers  = { azurerm = azurerm.spoke, azuread = azuread.spoke }
@@ -137,7 +134,6 @@ module "step1_2_groups_roles" {
 # -----------------------------------------------------------
 # Resource Group
 # -----------------------------------------------------------
-# Step4: RG
 module "step4_resource_group" {
   source                = "../modules/Resource Group"
   providers             = { azurerm = azurerm.spoke }
@@ -278,3 +274,4 @@ output "hub_to_spoke_peering_id" { value = module.vnet-peering.hub_to_spoke_peer
 output "spoke_to_hub_peering_id" { value = module.vnet-peering.spoke_to_hub_peering_id }
 output "bastion_host_id"         { value = module.bastion.bastion_host_id }
 output "bastion_public_ip"       { value = module.bastion.bastion_public_ip }
+
