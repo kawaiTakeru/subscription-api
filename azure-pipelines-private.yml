@@ -1,7 +1,5 @@
 # ===========================================================
-# Azure DevOps Pipeline (Private): terraform/private の main.tf を一括適用
-# - Step0: サブスクリプションID確定（新規作成/既存採用）
-# - Step1: main.tf を init/plan/apply（フル適用、-target は使わない）
+# Azure DevOps Pipeline (Private): 
 # ===========================================================
 
 parameters:
@@ -14,7 +12,7 @@ parameters:
     default: bft
   - name: email
     type: string
-    default: ""     # '["user1@contoso.com","user2@contoso.com"]' もしくは "" か "user@contoso.com"
+    default: ""   
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
@@ -88,11 +86,9 @@ stages:
                   return $t.Trim("-")
                 }
 
-                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
+                function Build-Base([string]$project,[string]$env,[string]$regionCode,[string]$seq) {
                   $p1 = Slugify $project
-                  $p2raw = Slugify $purpose
-                  $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
-                  $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
+                  $parts = @($p1,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
                   return ($parts -join "-")
                 }
 
@@ -100,12 +96,11 @@ stages:
                   $explicit = Get-TfVar $tfvarsPath "subscription_alias_name"
                   if ($explicit) { return $explicit }
                   $projectParam = "${{ parameters.project_name }}"
-                  $purpose = Get-TfVar $tfvarsPath "purpose_name"
                   $envId   = "${{ parameters.environment_id }}"
                   $regionCode = Get-TfVar $tfvarsPath "region_code"
                   $seq     = Get-TfVar $tfvarsPath "sequence"
-                  $base    = Build-Base $projectParam $purpose $envId $regionCode $seq
-                  if (-not $base) { throw "cannot build alias base (check tfvars: purpose_name/region_code/sequence)" }
+                  $base    = Build-Base $projectParam $envId $regionCode $seq
+                  if (-not $base) { throw "cannot build alias base (check tfvars: region_code/sequence)" }
                   return "alias-$base"
                 }
 
@@ -189,9 +184,9 @@ stages:
 
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-          # Step1: 対応ディレクトリで main.tf を一括適用
+          # Step1: 依存基盤（RG/VNet/Subnets/NSGs/Association）を先行適用
           - task: AzureCLI@2
-            displayName: Step1 - Terraform apply (private)
+            displayName: Step1 - Target apply (RG/VNet/Subnets/NSGs)
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
@@ -210,7 +205,7 @@ stages:
               inlineScript: |
                 $ErrorActionPreference='Stop'
 
-                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正して TF_VAR_* に設定
+                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正
                 $raw = '${{ parameters.email }}'
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
@@ -229,9 +224,69 @@ stages:
                 Push-Location "$(tfWorkingDir)"
                 try {
                   terraform init -no-color -input=false
-                  terraform plan -no-color -input=false -out=tfplan
-                  if ($LASTEXITCODE -ne 0) { throw "Terraform plan failed" }
-
-                  terraform apply -no-color -input=false -auto-approve tfplan
-                  if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target="module.groups.azuread_group.admin" `
+                    -target="module.groups.azuread_group.developer" `
+                    -target="module.groups.azuread_group.operator" `
+                    -target="module.groups.azurerm_role_assignment.rg_owner_admin" `
+                    -target="module.groups.azuread_group_member.admin_members" `
+                    -target="module.resource_group.azurerm_resource_group.rg" `
+                    -target="module.vnet.azurerm_virtual_network.vnet" `
+                    -target="module.networking.azurerm_subnet.bastion_subnet" `
+                    -target="module.networking.azurerm_subnet.subnet" `
+                    -target="module.networking.azurerm_network_security_group.subnet_nsg" `
+                    -target="module.networking.azurerm_network_security_group.bastion_nsg" `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowGatewayManagerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowAzureLoadBalancerInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowBastionHostCommunication"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowInbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowGatewayManager"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowAzureLoadBalancer"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowBastionHostCommunications"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowSshRdpOutbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowAzureCloudOutbound"]' `
+                    -target='module.networking.azurerm_network_security_rule.bastion_rules["AllowBastionCommunication"]' `
+                    -target="module.networking.azurerm_subnet_network_security_group_association.subnet_assoc" `
+                    -target="module.networking.azurerm_subnet_network_security_group_association.bastion_assoc" `
+                    -target="module.bastion.azurerm_public_ip.bastion_pip" `
+                    -target="module.bastion.azurerm_bastion_host.bastion" `
+                    -target="module.route-table.azurerm_route_table.route_table_private" `
+                    -target="module.route-table.azurerm_route.route_default_to_gateway" `
+                    -target="module.route-table.azurerm_route.route_kms1" `
+                    -target="module.route-table.azurerm_route.route_kms2" `
+                    -target="module.route-table.azurerm_route.route_kms3" `
+                    -target="module.route-table.azurerm_subnet_route_table_association.subnet_rt_assoc" `
+                    -target="module.vnet-peering.azurerm_virtual_network_peering.hub_to_spoke" `
+                    -target="module.vnet-peering.azurerm_virtual_network_peering.spoke_to_hub"
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform target apply (infra base) failed" }
                 } finally { Pop-Location }
+
+          # Step2: 問題の NSG ルールのみ先行適用（AllowBastionInbound）
+          - task: AzureCLI@2
+            displayName: Step2 - Target apply (NSG rule:AllowBastionInbound)
+            env:
+              ARM_USE_AZCLI_AUTH: 'true'
+              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+                Push-Location "$(tfWorkingDir)"
+                try {
+                  terraform init -no-color -input=false
+                  terraform apply -no-color -input=false -auto-approve `
+                    -target='module.networking.azurerm_network_security_rule.subnet_rules["AllowBastionInbound"]'
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform target apply (NSG rule patch) failed" }
+                } finally { Pop-Location }
+
