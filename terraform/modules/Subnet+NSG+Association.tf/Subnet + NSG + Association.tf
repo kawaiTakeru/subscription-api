@@ -251,6 +251,23 @@ resource "azurerm_subnet" "bastion_subnet" {
 }
 
 # -----------------------------------------------------------
+# Read-after-create: Subnet info via data source (for NSG rules)
+# -----------------------------------------------------------
+data "azurerm_subnet" "subnet_created" {
+  name                 = azurerm_subnet.subnet.name
+  resource_group_name  = var.rg_name
+  virtual_network_name = var.vnet_name
+  depends_on           = [azurerm_subnet.subnet]
+}
+
+data "azurerm_subnet" "bastion_subnet_created" {
+  name                 = azurerm_subnet.bastion_subnet.name
+  resource_group_name  = var.rg_name
+  virtual_network_name = var.vnet_name
+  depends_on           = [azurerm_subnet.bastion_subnet]
+}
+
+# -----------------------------------------------------------
 # Outputs（デバッグ・確認用）
 # -----------------------------------------------------------
 output "subnet_id"             { value = azurerm_subnet.subnet.id }
@@ -302,7 +319,7 @@ resource "azurerm_network_security_rule" "subnet_rules" {
   )
 
   destination_address_prefixes = (
-    each.value.destination_address_prefix == "BASTION_SUBNET" ? azurerm_subnet.bastion_subnet.address_prefixes : null
+    each.value.destination_address_prefix == "BASTION_SUBNET" ? data.azurerm_subnet.bastion_subnet_created.address_prefixes : null
   )
 
   description                 = try(each.value.description, null)
