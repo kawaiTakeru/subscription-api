@@ -14,7 +14,7 @@ parameters:
     default: bft
   - name: email
     type: string
-    default: ""     # '["user1@contoso.com","user2@contoso.com"]' もしくは "" か "user@contoso.com"
+    default: ""    
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
@@ -235,3 +235,4 @@ stages:
                   terraform apply -no-color -input=false -auto-approve tfplan
                   if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
                 } finally { Pop-Location }
+
