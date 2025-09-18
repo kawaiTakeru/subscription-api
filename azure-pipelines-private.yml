@@ -1,7 +1,5 @@
 # ===========================================================
-# Azure DevOps Pipeline (Private): terraform/private の main.tf を一括適用
-# - Step0: サブスクリプションID確定（新規作成/既存採用）
-# - Step1: main.tf を init/plan/apply（フル適用、-target は使わない）
+# Azure DevOps Pipeline (Private): 
 # ===========================================================
 
 parameters:
@@ -49,10 +47,10 @@ stages:
             inputs:
               terraformVersion: 1.7.5
 
-          # Step0: サブスクリプション作成または既存採用 → finalSpokeSubscriptionId を設定
+          # サブスクリプション作成または既存採用 → finalSpokeSubscriptionId を設定
           - task: AzureCLI@2
-            name: step0
-            displayName: Step0 - Subscription (create or reuse)
+            name: create_or_reuse_subscription
+            displayName: Subscription (create or reuse)
             env:
               TF_INPUT: 'false'
               TF_IN_AUTOMATION: 'true'
@@ -189,9 +187,9 @@ stages:
 
                 Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
 
-          # Step1: 対応ディレクトリで main.tf を一括適用
+          # apply main.tf（フル適用）
           - task: AzureCLI@2
-            displayName: Step1 - Terraform apply (private)
+            displayName: Terraform apply (private)
             env:
               ARM_USE_AZCLI_AUTH: 'true'
               ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
