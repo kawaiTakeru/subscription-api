@@ -101,7 +101,7 @@ stages:
                   $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
                   if (-not $line) { return "" }
                   $val = $line -replace "^\s*$Key\s*=\s*", ""
-                  if ($val -match "#") { $val = ($val -split "#)[0]" }
+                  if ($val -match "#") { $val = ($val -split "#")[0] }  # ← 修正
                   $val.Trim().Trim('"')
                 }
 
