@@ -75,7 +75,7 @@ stages:
                 $tfDir = "$(tfWorkingDir)"
 
                 function Set-TerraformOidcEnv {
-                  # 既存の CLI 認証フラグは消しておく
+                  # 既存の CLI 認証フラグ削除
                   Remove-Item Env:\ARM_USE_AZCLI_AUTH -ErrorAction SilentlyContinue
                   $token = $env:idToken
                   if (-not $token) { $token = $env:AZURE_FEDERATED_TOKEN }
@@ -336,5 +336,6 @@ stages:
                   --auth-mode login
 
                 Write-Host "Deleted state: $container/$key"
+
 
 
