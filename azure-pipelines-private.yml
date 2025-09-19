@@ -170,7 +170,9 @@ stages:
                         $raw = terraform output -raw created_subscription_id 2>$null
                         if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
-                      if (-not $createdSubId) { $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null }
+                      if (-not $createdSubId -and $aliasName) {
+                        $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null
+                      }
                       if (-not $createdSubId) {
                         Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10
                       }
@@ -194,6 +196,13 @@ stages:
 
                   Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
                 } finally { Pop-Location }
+            env:
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
 
           # apply main.tf（フル適用）
           - task: AzureCLI@2
@@ -283,3 +292,12 @@ stages:
                   terraform apply -no-color -input=false -auto-approve tfplan
                   if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
                 } finally { Pop-Location }
+            env:
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
