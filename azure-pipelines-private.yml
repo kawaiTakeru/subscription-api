@@ -71,18 +71,26 @@ stages:
                 $ErrorActionPreference='Stop'
                 $tfDir = "$(tfWorkingDir)"
 
-                # --- OIDC 環境変数（プロバイダ用） ---
-                $clientId = $env:servicePrincipalId
-                if (-not $clientId) { $clientId = az account show --query "user.name" -o tsv }
-                $tenantId = $env:tenantId
-                if (-not $tenantId) { $tenantId = az account show --query "tenantId" -o tsv }
-                $fedFile = $env:AZURE_FEDERATED_TOKEN_FILE
-                if (-not $fedFile -or -not (Test-Path $fedFile)) { Write-Host "WARNING: AZURE_FEDERATED_TOKEN_FILE not found. OIDC auth may fail." }
-
-                $env:ARM_USE_OIDC = 'true'
-                $env:ARM_CLIENT_ID = $clientId
-                $env:ARM_TENANT_ID = $tenantId
-                if ($fedFile) { $env:ARM_OIDC_TOKEN_FILE = $fedFile }
+                function Set-TerraformOidcEnv {
+                  # 既存の CLI 認証フラグは消しておく
+                  Remove-Item Env:\ARM_USE_AZCLI_AUTH -ErrorAction SilentlyContinue
+                  $token = $env:idToken
+                  if (-not $token) { $token = $env:AZURE_FEDERATED_TOKEN }
+                  if (-not $token -and $env:AZURE_FEDERATED_TOKEN_FILE -and (Test-Path $env:AZURE_FEDERATED_TOKEN_FILE)) {
+                    $token = Get-Content -Raw -Path $env:AZURE_FEDERATED_TOKEN_FILE
+                  }
+                  $spId = $env:servicePrincipalId
+                  $ten  = $env:tenantId
+                  Write-Host "[OIDC] idToken=" ([bool]$env:idToken) ", AZURE_FEDERATED_TOKEN=" ([bool]$env:AZURE_FEDERATED_TOKEN) ", tokenFile=" (($env:AZURE_FEDERATED_TOKEN_FILE) -and (Test-Path $env:AZURE_FEDERATED_TOKEN_FILE))
+                  Write-Host "[OIDC] servicePrincipalId present? " ([bool]$spId) ", tenantId present? " ([bool]$ten)
+                  if (-not $token) { throw "OIDC token not found. Ensure the Service Connection uses Workload Identity Federation and the task has addSpnToEnvironment: true." }
+                  if (-not $spId -or -not $ten) { throw "servicePrincipalId/tenantId not present. addSpnToEnvironment: true が必要です。" }
+                  $env:ARM_USE_OIDC  = 'true'
+                  $env:ARM_CLIENT_ID = $spId
+                  $env:ARM_TENANT_ID = $ten
+                  $env:ARM_OIDC_TOKEN = $token
+                  Write-Host "[OIDC] Configured ARM_USE_OIDC for Terraform provider."
+                }
 
                 function Get-TfVar {
                   param([string]$Path,[string]$Key)
@@ -125,34 +133,11 @@ stages:
                   return "alias-$base"
                 }
 
-                function Get-AliasStateField([string]$field){
-                  $out = terraform state show azapi_resource.subscription[0] 2>$null
-                  if (-not $out) { return $null }
-                  $m = $out | Select-String -Pattern "^\s*$field\s*=\s*""([^""]+)""" | Select-Object -First 1
-                  if ($m) { return $m.Matches[0].Groups[1].Value }
-                  return $null
-                }
-
-                function Try-GetSubIdViaAliasIdFromState {
-                  $aliasId = Get-AliasStateField "id"
-                  if (-not $aliasId) { return $null }
-                  $uri = "https://management.azure.com$aliasId?api-version=2021-10-01"
-                  $sid = az rest --method get --uri $uri --query "properties.subscriptionId" -o tsv 2>$null
-                  if ($sid -and (Is-Guid $sid)) { return $sid }
-                  return $null
-                }
-
-                function Try-GetSubIdViaAliasName([string]$aliasName) {
-                  $uri = "https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01"
-                  $sid = az rest --method get --uri $uri --query "properties.subscriptionId" -o tsv 2>$null
-                  if ($sid -and (Is-Guid $sid)) { return $sid }
-                  return $null
-                }
+                Set-TerraformOidcEnv
 
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
                 $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
                 if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
-
                 $createSub = Get-TfVar $tfvars "create_subscription"
                 $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
 
@@ -185,13 +170,9 @@ stages:
                         $raw = terraform output -raw created_subscription_id 2>$null
                         if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
                       } catch {}
-
-                      if (-not $createdSubId) { $createdSubId = Try-GetSubIdViaAliasIdFromState }
-                      if (-not $createdSubId -and $aliasName) { $createdSubId = Try-GetSubIdViaAliasName -aliasName $aliasName }
-
+                      if (-not $createdSubId) { $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null }
                       if (-not $createdSubId) {
-                        Write-Host "[Step0] Waiting subscriptionId... ($i/36)"
-                        Start-Sleep -Seconds 10
+                        Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10
                       }
                     }
 
@@ -203,7 +184,6 @@ stages:
                       if ($LASTEXITCODE -eq 0) { break }
                       Start-Sleep -Seconds 10
                     }
-
                     Write-Host "Created SubscriptionId: $createdSubId"
                     Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$createdSubId"
                   } elseif ($createSub -eq "false") {
@@ -226,35 +206,26 @@ stages:
               inlineScript: |
                 $ErrorActionPreference='Stop'
 
-                # --- OIDC 環境変数（プロバイダ用） ---
-                $clientId = $env:servicePrincipalId
-                if (-not $clientId) { $clientId = az account show --query "user.name" -o tsv }
-                $tenantId = $env:tenantId
-                if (-not $tenantId) { $tenantId = az account show --query "tenantId" -o tsv }
-                $fedFile = $env:AZURE_FEDERATED_TOKEN_FILE
-                if (-not $fedFile -or -not (Test-Path $fedFile)) { Write-Host "WARNING: AZURE_FEDERATED_TOKEN_FILE not found. OIDC auth may fail." }
-
-                $env:ARM_USE_OIDC = 'true'
-                $env:ARM_CLIENT_ID = $clientId
-                $env:ARM_TENANT_ID = $tenantId
-                if ($fedFile) { $env:ARM_OIDC_TOKEN_FILE = $fedFile }
-
-                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正して TF_VAR_* に設定
-                $raw = '${{ parameters.email }}'
-                if ($raw -and $raw.Trim() -ne "") {
-                  try {
-                    $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
-                    if ($tmp -isnot [System.Array]) {
-                      $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
-                    } else {
-                      $env:TF_VAR_subscription_owner_emails = $raw
-                    }
-                  } catch {
-                    $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                function Set-TerraformOidcEnv {
+                  Remove-Item Env:\ARM_USE_AZCLI_AUTH -ErrorAction SilentlyContinue
+                  $token = $env:idToken
+                  if (-not $token) { $token = $env:AZURE_FEDERATED_TOKEN }
+                  if (-not $token -and $env:AZURE_FEDERATED_TOKEN_FILE -and (Test-Path $env:AZURE_FEDERATED_TOKEN_FILE)) {
+                    $token = Get-Content -Raw -Path $env:AZURE_FEDERATED_TOKEN_FILE
                   }
+                  $spId = $env:servicePrincipalId
+                  $ten  = $env:tenantId
+                  Write-Host "[OIDC] idToken=" ([bool]$env:idToken) ", AZURE_FEDERATED_TOKEN=" ([bool]$env:AZURE_FEDERATED_TOKEN) ", tokenFile=" (($env:AZURE_FEDERATED_TOKEN_FILE) -and (Test-Path $env:AZURE_FEDERATED_TOKEN_FILE))
+                  if (-not $token) { throw "OIDC token not found. Ensure WIF service connection and addSpnToEnvironment: true." }
+                  if (-not $spId -or -not $ten) { throw "servicePrincipalId/tenantId not present." }
+                  $env:ARM_USE_OIDC  = 'true'
+                  $env:ARM_CLIENT_ID = $spId
+                  $env:ARM_TENANT_ID = $ten
+                  $env:ARM_OIDC_TOKEN = $token
                 }
 
                 # プロバイダ用サブスク（spoke）を明示
+                Set-TerraformOidcEnv
                 $env:ARM_SUBSCRIPTION_ID = "$(finalSpokeSubscriptionId)"
 
                 Push-Location "$(tfWorkingDir)"
