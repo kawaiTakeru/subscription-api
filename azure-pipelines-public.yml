@@ -45,7 +45,7 @@ variables:
     value: subscription-api
   # 成功時に tfstate を削除するか（既定: false）
   - name: deleteTfStateOnSuccess
-    value: 'false'
+    value: 'true'
 
 stages:
   - stage: provision_public
@@ -303,3 +303,4 @@ stages:
                   --auth-mode login
 
                 Write-Host "Deleted state: $container/$key"
+
