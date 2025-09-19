@@ -87,6 +87,7 @@ stages:
                   $env:ARM_CLIENT_ID = $spId
                   $env:ARM_TENANT_ID = $ten
                   $env:ARM_OIDC_TOKEN = $token
+                  Write-Host "[OIDC] Configured ARM_USE_OIDC for Terraform provider."
                 }
 
                 function Get-TfVar {
@@ -129,7 +130,6 @@ stages:
 
                 Set-TerraformOidcEnv
 
-                $tfDir = "$(tfWorkingDir)"
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
                 $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
                 if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
@@ -153,6 +153,7 @@ stages:
                   if ($createSub -eq "true") {
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
+
                     terraform apply -no-color -input=false -auto-approve -target "data.azapi_resource.subscription_get[0]"
                     if ($LASTEXITCODE -ne 0) { throw "read alias (data) failed" }
 
@@ -160,10 +161,13 @@ stages:
                     $aliasName = Get-AliasName $tfvars
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
                       try { $raw = terraform output -raw created_subscription_id 2>$null; if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw } } catch {}
-                      if (-not $createdSubId) { $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null }
+                      if (-not $createdSubId -and $aliasName) {
+                        $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null
+                      }
                       if (-not $createdSubId) { Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10 }
                     }
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
+
                     for ($j=1; $j -le 60; $j++) {
                       az account list --refresh 1>$null 2>$null
                       az account show --subscription $createdSubId -o none 2>$null
@@ -180,6 +184,13 @@ stages:
 
                   Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
                 } finally { Pop-Location }
+            env:
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
 
           # apply main.tf（フル適用）
           - task: AzureCLI@2
@@ -249,3 +260,12 @@ stages:
                   terraform apply -no-color -input=false -auto-approve tfplan
                   if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
                 } finally { Pop-Location }
+            env:
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
