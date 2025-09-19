@@ -43,8 +43,7 @@ variables:
     value: tfstate
   - name: tfStateKeyPrefix
     value: subscription-api
-  # 成功時に tfstate を削除するか
-  （既定: false）
+  # 成功時に tfstate を削除するか（true削除）
   - name: deleteTfStateOnSuccess
     value: 'true'
 
