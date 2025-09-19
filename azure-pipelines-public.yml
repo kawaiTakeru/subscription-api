@@ -62,20 +62,27 @@ stages:
           - task: AzureCLI@2
             name: create_or_reuse_subscription
             displayName: Subscription (create or reuse)
-            env:
-              TF_INPUT: 'false'
-              TF_IN_AUTOMATION: 'true'
-              TF_VAR_project_name: ${{ parameters.project_name }}
-              TF_VAR_environment_id: ${{ parameters.environment_id }}
-              TF_VAR_vnet_type: $(vnet_type)
-              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
             inputs:
               azureSubscription: $(azureServiceConnection)
+              addSpnToEnvironment: true
               scriptType: pscore
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
                 $tfDir = "$(tfWorkingDir)"
+
+                # --- OIDC 環境変数（プロバイダ用） ---
+                $clientId = $env:servicePrincipalId
+                if (-not $clientId) { $clientId = az account show --query "user.name" -o tsv }
+                $tenantId = $env:tenantId
+                if (-not $tenantId) { $tenantId = az account show --query "tenantId" -o tsv }
+                $fedFile = $env:AZURE_FEDERATED_TOKEN_FILE
+                if (-not $fedFile -or -not (Test-Path $fedFile)) { Write-Host "WARNING: AZURE_FEDERATED_TOKEN_FILE not found. OIDC auth may fail." }
+
+                $env:ARM_USE_OIDC = 'true'
+                $env:ARM_CLIENT_ID = $clientId
+                $env:ARM_TENANT_ID = $tenantId
+                if ($fedFile) { $env:ARM_OIDC_TOKEN_FILE = $fedFile }
 
                 function Get-TfVar {
                   param([string]$Path,[string]$Key)
@@ -139,6 +146,7 @@ stages:
                   return $null
                 }
 
+                $tfDir = "$(tfWorkingDir)"
                 $tfvars = Join-Path $tfDir "terraform.tfvars"
                 $hubSubId = Get-TfVar $tfvars "hub_subscription_id"
                 if (-not $hubSubId) { throw "hub_subscription_id must be set in tfvars." }
@@ -146,21 +154,21 @@ stages:
                 $createSub = Get-TfVar $tfvars "create_subscription"
                 $finalSubId = Get-TfVar $tfvars "spoke_subscription_id"
 
-                if ($createSub -eq "true") {
-                  Push-Location $tfDir
-                  try {
-                    # --- tfstate backend init (AAD/RBAC) ---
-                    $key = "$(tfStateKeyPrefix)/$(vnet_type)/${{ parameters.project_name }}-${{ parameters.environment_id }}.tfstate"
-                    $backendArgs = @(
-                      "-backend-config=subscription_id=$(tfStateSubscriptionId)",
-                      "-backend-config=resource_group_name=$(tfStateResourceGroup)",
-                      "-backend-config=storage_account_name=$(tfStateStorageAccount)",
-                      "-backend-config=container_name=$(tfStateContainer)",
-                      "-backend-config=key=$key",
-                      "-backend-config=use_azuread_auth=true"
-                    )
-                    terraform init -no-color -input=false -reconfigure @backendArgs
+                Push-Location $tfDir
+                try {
+                  # --- tfstate backend init (AAD/RBAC) ---
+                  $key = "$(tfStateKeyPrefix)/$(vnet_type)/${{ parameters.project_name }}-${{ parameters.environment_id }}.tfstate"
+                  $backendArgs = @(
+                    "-backend-config=subscription_id=$(tfStateSubscriptionId)",
+                    "-backend-config=resource_group_name=$(tfStateResourceGroup)",
+                    "-backend-config=storage_account_name=$(tfStateStorageAccount)",
+                    "-backend-config=container_name=$(tfStateContainer)",
+                    "-backend-config=key=$key",
+                    "-backend-config=use_azuread_auth=true"
+                  )
+                  terraform init -no-color -input=false -reconfigure @backendArgs
 
+                  if ($createSub -eq "true") {
                     terraform apply -no-color -input=false -auto-approve -target "azapi_resource.subscription[0]"
                     if ($LASTEXITCODE -ne 0) { throw "subscription create failed" }
 
@@ -196,35 +204,38 @@ stages:
 
                     Write-Host "Created SubscriptionId: $createdSubId"
                     Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$createdSubId"
-                  } finally { Pop-Location }
-                } elseif ($createSub -eq "false") {
-                  if (-not $finalSubId) { throw "spoke_subscription_id missing for existing subscription use." }
-                  if (-not (Is-Guid $finalSubId)) { throw "spoke_subscription_id must be a GUID. Actual: $finalSubId" }
-                  Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
-                } else { throw "create_subscription must be true or false in tfvars." }
+                  } elseif ($createSub -eq "false") {
+                    if (-not $finalSubId) { throw "spoke_subscription_id missing for existing subscription use." }
+                    if (-not (Is-Guid $finalSubId)) { throw "spoke_subscription_id must be a GUID. Actual: $finalSubId" }
+                    Write-Host "##vso[task.setvariable variable=finalSpokeSubscriptionId]$finalSubId"
+                  } else { throw "create_subscription must be true or false in tfvars." }
 
-                Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
+                  Write-Host "##vso[task.setvariable variable=hubSubscriptionId]$hubSubId"
+                } finally { Pop-Location }
 
           # apply main.tf（フル適用）
           - task: AzureCLI@2
             displayName: Terraform apply (public)
-            env:
-              ARM_USE_AZCLI_AUTH: 'true'
-              ARM_SUBSCRIPTION_ID: $(finalSpokeSubscriptionId)
-              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
-              TF_VAR_create_subscription: false
-              TF_VAR_project_name: ${{ parameters.project_name }}
-              TF_VAR_environment_id: ${{ parameters.environment_id }}
-              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
-              TF_VAR_vnet_type: $(vnet_type)
-              TF_INPUT: 'false'
-              TF_IN_AUTOMATION: 'true'
             inputs:
               azureSubscription: $(azureServiceConnection)
+              addSpnToEnvironment: true
               scriptType: pscore
               scriptLocation: inlineScript
               inlineScript: |
                 $ErrorActionPreference='Stop'
+
+                # --- OIDC 環境変数（プロバイダ用） ---
+                $clientId = $env:servicePrincipalId
+                if (-not $clientId) { $clientId = az account show --query "user.name" -o tsv }
+                $tenantId = $env:tenantId
+                if (-not $tenantId) { $tenantId = az account show --query "tenantId" -o tsv }
+                $fedFile = $env:AZURE_FEDERATED_TOKEN_FILE
+                if (-not $fedFile -or -not (Test-Path $fedFile)) { Write-Host "WARNING: AZURE_FEDERATED_TOKEN_FILE not found. OIDC auth may fail." }
+
+                $env:ARM_USE_OIDC = 'true'
+                $env:ARM_CLIENT_ID = $clientId
+                $env:ARM_TENANT_ID = $tenantId
+                if ($fedFile) { $env:ARM_OIDC_TOKEN_FILE = $fedFile }
 
                 # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正して TF_VAR_* に設定
                 $raw = '${{ parameters.email }}'
@@ -241,7 +252,9 @@ stages:
                   }
                 }
 
-                az account set --subscription $env:ARM_SUBSCRIPTION_ID
+                # プロバイダ用サブスク（spoke）を明示
+                $env:ARM_SUBSCRIPTION_ID = "$(finalSpokeSubscriptionId)"
+
                 Push-Location "$(tfWorkingDir)"
                 try {
                   # --- tfstate backend init (AAD/RBAC) ---
