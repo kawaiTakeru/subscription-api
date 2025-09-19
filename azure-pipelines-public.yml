@@ -228,7 +228,7 @@ stages:
                 Set-TerraformOidcEnv
                 $env:ARM_SUBSCRIPTION_ID = "$(finalSpokeSubscriptionId)"
 
-                # email(=subscription_owner_emails) を必要時のみ JSON 配列に補正
+                # email(=subscription_owner_emails) をJSON 配列に補正
                 $raw = '${{ parameters.email }}'
                 if ($raw -and $raw.Trim() -ne "") {
                   try {
@@ -273,7 +273,7 @@ stages:
               TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
               TF_VAR_create_subscription: false
 
-          # 成功時のみ tfstate を削除（使い捨て運用向け）
+          # 成功時のみ tfstate を削除
           - task: AzureCLI@2
             displayName: Delete tfstate blob (on success)
             condition: and(succeeded(), eq(variables.deleteTfStateOnSuccess, 'true'))
@@ -303,4 +303,5 @@ stages:
                   --auth-mode login
 
                 Write-Host "Deleted state: $container/$key"
+
 
