@@ -1,0 +1,7 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+# *.tfvars
+!*.tfvars.example
+# track the concrete tfvars used by this repo
