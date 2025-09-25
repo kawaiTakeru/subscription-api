@@ -12,7 +12,7 @@ parameters:
     default: bft
   - name: email
     type: string
-    default: "crt-test-tkawai@bftcrttest.onmicrosoft.com"    
+    default: ""    
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
@@ -75,7 +75,6 @@ stages:
                 $tfDir = "$(tfWorkingDir)"
 
                 function Set-TerraformOidcEnv {
-                  # 既存の CLI 認証フラグ削除
                   Remove-Item Env:\ARM_USE_AZCLI_AUTH -ErrorAction SilentlyContinue
                   $token = $env:idToken
                   if (-not $token) { $token = $env:AZURE_FEDERATED_TOKEN }
@@ -101,7 +100,7 @@ stages:
                   $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
                   if (-not $line) { return "" }
                   $val = $line -replace "^\s*$Key\s*=\s*", ""
-                  if ($val -match "#") { $val = ($val -split "#")[0] }  # ← 修正
+                  if ($val -match "#") { $val = ($val -split "#")[0] }
                   $val.Trim().Trim('"')
                 }
 
@@ -240,6 +239,23 @@ stages:
                 Set-TerraformOidcEnv
                 $env:ARM_SUBSCRIPTION_ID = "$(finalSpokeSubscriptionId)"
 
+                # email(=subscription_owner_emails) をJSON 配列に補正
+                $raw = '${{ parameters.email }}'
+                Write-Host "DEBUG: raw email param: $raw"
+                if ($raw -and $raw.Trim() -ne "") {
+                  try {
+                    $tmp = $raw | ConvertFrom-Json -ErrorAction Stop
+                    if ($tmp -isnot [System.Array]) {
+                      $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                    } else {
+                      $env:TF_VAR_subscription_owner_emails = $raw
+                    }
+                  } catch {
+                    $env:TF_VAR_subscription_owner_emails = ('["' + ($raw.Trim('"')) + '"]')
+                  }
+                }
+                Write-Host "DEBUG: TF_VAR_subscription_owner_emails: $env:TF_VAR_subscription_owner_emails"
+
                 Push-Location "$(tfWorkingDir)"
                 try {
                   # --- tfstate backend init (AAD/RBAC) ---
@@ -253,41 +269,6 @@ stages:
                     "-backend-config=use_azuread_auth=true"
                   )
                   terraform init -no-color -input=false -reconfigure @backendArgs
-
-                  # 既存 RG の自動 import（任意）
-                  function Get-TfVar {
-                    param([string]$Path,[string]$Key)
-                    if (-not (Test-Path $Path)) { return "" }
-                    $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*$Key\s*=" } | Select-Object -First 1
-                    if (-not $line) { return "" }
-                    $val = $line -replace "^\s*$Key\s*=\s*", ""
-                    if ($val -match "#") { $val = ($val -split "#")[0] }
-                    $val.Trim().Trim('"')
-                  }
-                  function Slugify([string]$s) {
-                    if (-not $s) { return "" }
-                    $t = $s.Trim().ToLower()
-                    $t = $t -replace " ", "-" -replace "_", "-" -replace "\.", "-" -replace "/", "-" -replace "\\", "-"
-                    $t = $t -replace "[^0-9a-z\-]", "-"
-                    return $t.Trim("-")
-                  }
-                  $tfvars = Join-Path (Get-Location) "terraform.tfvars"
-                  $projectSlug = Slugify "${{ parameters.project_name }}"
-                  $envId = "${{ parameters.environment_id }}"
-                  $regionCode = Get-TfVar $tfvars "region_code"
-                  $seq = Get-TfVar $tfvars "sequence"
-                  if ($projectSlug -and $envId -and $regionCode -and $seq) {
-                    $rgName = "rg-$projectSlug-$envId-$regionCode-$seq"
-                    az group show -n $rgName -o none 2>$null
-                    if ($LASTEXITCODE -eq 0) {
-                      terraform state show module.resource_group.azurerm_resource_group.rg 1>$null 2>$null
-                      if ($LASTEXITCODE -ne 0) {
-                        $rgId = "/subscriptions/$($env:ARM_SUBSCRIPTION_ID)/resourceGroups/$rgName"
-                        Write-Host "[Import] azurerm_resource_group.rg -> $rgId"
-                        terraform import -no-color module.resource_group.azurerm_resource_group.rg $rgId
-                      }
-                    }
-                  }
 
                   terraform plan -no-color -input=false -out=tfplan
                   if ($LASTEXITCODE -ne 0) { throw "Terraform plan failed" }
@@ -319,7 +300,6 @@ stages:
                 $container = "$(tfStateContainer)"
                 $key       = "$(tfStateKeyPrefix)/$(vnet_type)/${{ parameters.project_name }}-${{ parameters.environment_id }}.tfstate"
 
-                # 念のため tfstate サブスクリプションへ切替（RBAC 対応）
                 az account set -s "$(tfStateSubscriptionId)" 2>$null
 
                 $exists = az storage blob exists --account-name $account --container-name $container --name $key --auth-mode login --query exists -o tsv
@@ -336,6 +316,3 @@ stages:
                   --auth-mode login
 
                 Write-Host "Deleted state: $container/$key"
-
-
-
