@@ -19,7 +19,7 @@ region = "japaneast"
 # 新規作成する場合のみ true、既存流用なら false
 # EAではサブスクリプショ作成のロジックが大きく異なるためサブスクリプション作成のみ別ロジック
 create_subscription   = true
-create_subscription   = false
+# create_subscription   = false
 
 # SpokeサブスクリプションID（既存利用時に指定）
 # spoke_subscription_id = "ebc7f56b-e245-4d10-b49a-59293a1e67f5"
@@ -57,4 +57,5 @@ allowed_port         = 3389
 hub_subscription_id = "7d1f78e5-bc6c-4018-847f-336ff47b9436"
 hub_rg_name         = "rg-test-hubnw-prd-jpe-001"
 hub_vnet_name       = "vnet-test-hubnw-prd-jpe-001"
+
 
