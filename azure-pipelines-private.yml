@@ -12,7 +12,7 @@ parameters:
     default: bft
   - name: email
     type: string
-    default: ""    
+    default: "crt-test-tkawai@bftcrttest.onmicrosoft.com"    
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
