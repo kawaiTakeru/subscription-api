@@ -12,7 +12,7 @@ parameters:
     default: bft
   - name: email
     type: string
-    default: ""    
+    default: ""     
   - name: management_group_id
     type: string
     default: "/providers/Microsoft.Management/managementGroups/mg-bft-test"
@@ -114,25 +114,21 @@ stages:
                   return $t.Trim("-")
                 }
 
-                function Build-Base([string]$project,[string]$purpose,[string]$env,[string]$regionCode,[string]$seq) {
+                function Build-AliasName([string]$project,[string]$env) {
                   $p1 = Slugify $project
-                  $p2raw = Slugify $purpose
-                  $p2 = if ($purpose -eq "検証") { "kensho" } elseif ($p2raw) { $p2raw } else { $p2raw }
-                  $parts = @($p1,$p2,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-                  return ($parts -join "-")
+                  $p2 = Slugify $env
+                  $parts = @($p1,$p2) | Where-Object { $_ -and $_.Trim() -ne "" }
+                  return ("alias-" + ($parts -join "-"))
                 }
 
                 function Get-AliasName($tfvarsPath) {
                   $explicit = Get-TfVar $tfvarsPath "subscription_alias_name"
                   if ($explicit) { return $explicit }
                   $projectParam = "${{ parameters.project_name }}"
-                  $purpose = Get-TfVar $tfvarsPath "purpose_name"
                   $envId   = "${{ parameters.environment_id }}"
-                  $regionCode = Get-TfVar $tfvarsPath "region_code"
-                  $seq     = Get-TfVar $tfvarsPath "sequence"
-                  $base    = Build-Base $projectParam $purpose $envId $regionCode $seq
-                  if (-not $base) { throw "cannot build alias base (check tfvars: purpose_name/region_code/sequence)" }
-                  return "alias-$base"
+                  $aliasName = Build-AliasName $projectParam $envId
+                  if (-not $aliasName) { throw "cannot build alias name (check parameters: project_name/environment_id)" }
+                  return $aliasName
                 }
 
                 Set-TerraformOidcEnv
