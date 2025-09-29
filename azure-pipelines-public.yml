@@ -113,10 +113,11 @@ stages:
                   return $t.Trim("-")
                 }
 
-                function Build-Base([string]$project,[string]$env,[string]$regionCode,[string]$seq) {
+                function Build-AliasName([string]$project,[string]$env) {
                   $p1 = Slugify $project
-                  $parts = @($p1,$env,$regionCode,$seq) | Where-Object { $_ -and $_.Trim() -ne "" }
-                  return ($parts -join "-")
+                  $p2 = Slugify $env
+                  $parts = @($p1,$p2) | Where-Object { $_ -and $_.Trim() -ne "" }
+                  return ("alias-" + ($parts -join "-"))
                 }
 
                 function Get-AliasName($tfvarsPath) {
@@ -124,11 +125,9 @@ stages:
                   if ($explicit) { return $explicit }
                   $projectParam = "${{ parameters.project_name }}"
                   $envId   = "${{ parameters.environment_id }}"
-                  $regionCode = Get-TfVar $tfvarsPath "region_code"
-                  $seq     = Get-TfVar $tfvarsPath "sequence"
-                  $base    = Build-Base $projectParam $envId $regionCode $seq
-                  if (-not $base) { throw "cannot build alias base (check tfvars: region_code/sequence)" }
-                  return "alias-$base"
+                  $aliasName = Build-AliasName $projectParam $envId
+                  if (-not $aliasName) { throw "cannot build alias name (check parameters: project_name/environment_id)" }
+                  return $aliasName
                 }
 
                 Set-TerraformOidcEnv
