@@ -246,4 +246,60 @@ stages:
                 Push-Location "$(tfWorkingDir)"
                 try {
                   # --- tfstate backend init (AAD/RBAC) ---
-                  $key = "$(tfStateKeyPrefix)/$(vnet_type
+                  $key = "$(tfStateKeyPrefix)/$(vnet_type)/${{ parameters.project_name }}-${{ parameters.environment_id }}.tfstate"
+                  $backendArgs = @(
+                    "-backend-config=subscription_id=$(tfStateSubscriptionId)",
+                    "-backend-config=resource_group_name=$(tfStateResourceGroup)",
+                    "-backend-config=storage_account_name=$(tfStateStorageAccount)",
+                    "-backend-config=container_name=$(tfStateContainer)",
+                    "-backend-config=key=$key",
+                    "-backend-config=use_azuread_auth=true"
+                  )
+                  terraform init -no-color -input=false -reconfigure @backendArgs
+
+                  terraform plan -no-color -input=false -out=tfplan
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform plan failed" }
+
+                  terraform apply -no-color -input=false -auto-approve tfplan
+                  if ($LASTEXITCODE -ne 0) { throw "Terraform apply failed" }
+                } finally { Pop-Location }
+            env:
+              TF_INPUT: 'false'
+              TF_IN_AUTOMATION: 'true'
+              TF_VAR_project_name: ${{ parameters.project_name }}
+              TF_VAR_environment_id: ${{ parameters.environment_id }}
+              TF_VAR_vnet_type: $(vnet_type)
+              TF_VAR_management_group_id: ${{ parameters.management_group_id }}
+              TF_VAR_spoke_subscription_id: $(finalSpokeSubscriptionId)
+              TF_VAR_create_subscription: false
+
+          # 成功時のみ tfstate を削除（使い捨て運用向け）
+          - task: AzureCLI@2
+            displayName: Delete tfstate blob (on success)
+            condition: and(succeeded(), eq(variables.deleteTfStateOnSuccess, 'true'))
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference='Stop'
+                $account   = "$(tfStateStorageAccount)"
+                $container = "$(tfStateContainer)"
+                $key       = "$(tfStateKeyPrefix)/$(vnet_type)/${{ parameters.project_name }}-${{ parameters.environment_id }}.tfstate"
+
+                az account set -s "$(tfStateSubscriptionId)" 2>$null
+
+                $exists = az storage blob exists --account-name $account --container-name $container --name $key --auth-mode login --query exists -o tsv
+                if ($exists -ne "true") {
+                  Write-Host "State blob not found: $key"
+                  exit 0
+                }
+
+                az storage blob delete `
+                  --account-name $account `
+                  --container-name $container `
+                  --name $key `
+                  --delete-snapshots include `
+                  --auth-mode login
+
+                Write-Host "Deleted state: $container/$key"
