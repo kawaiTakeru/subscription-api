@@ -162,7 +162,6 @@ stages:
 
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
-
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
                       try {
                         $raw = terraform output -raw created_subscription_id 2>$null
