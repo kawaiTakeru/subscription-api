@@ -84,8 +84,9 @@ stages:
                   $spId = $env:servicePrincipalId
                   $ten  = $env:tenantId
                   Write-Host "[OIDC] idToken=" ([bool]$env:idToken) ", AZURE_FEDERATED_TOKEN=" ([bool]$env:AZURE_FEDERATED_TOKEN) ", tokenFile=" (($env:AZURE_FEDERATED_TOKEN_FILE) -and (Test-Path $env:AZURE_FEDERATED_TOKEN_FILE))
-                  if (-not $token) { throw "OIDC token not found. Ensure WIF service connection and addSpnToEnvironment: true." }
-                  if (-not $spId -or -not $ten) { throw "servicePrincipalId/tenantId not present." }
+                  Write-Host "[OIDC] servicePrincipalId present? " ([bool]$spId) ", tenantId present? " ([bool]$ten)
+                  if (-not $token) { throw "OIDC token not found. Ensure the Service Connection uses Workload Identity Federation and the task has addSpnToEnvironment: true." }
+                  if (-not $spId -or -not $ten) { throw "servicePrincipalId/tenantId not present. addSpnToEnvironment: true が必要です。" }
                   $env:ARM_USE_OIDC  = 'true'
                   $env:ARM_CLIENT_ID = $spId
                   $env:ARM_TENANT_ID = $ten
@@ -162,12 +163,18 @@ stages:
                     $createdSubId = $null
                     $aliasName = Get-AliasName $tfvars
                     for ($i=1; $i -le 36 -and -not $createdSubId; $i++) {
-                      try { $raw = terraform output -raw created_subscription_id 2>$null; if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw } } catch {}
+                      try {
+                        $raw = terraform output -raw created_subscription_id 2>$null
+                        if ($raw -and (Is-Guid $raw)) { $createdSubId = $raw }
+                      } catch {}
                       if (-not $createdSubId -and $aliasName) {
                         $createdSubId = az rest --method get --uri ("https://management.azure.com/providers/Microsoft.Subscription/aliases/$aliasName?api-version=2021-10-01") --query "properties.subscriptionId" -o tsv 2>$null
                       }
-                      if (-not $createdSubId) { Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10 }
+                      if (-not $createdSubId) {
+                        Write-Host "[Step0] Waiting subscriptionId... ($i/36)"; Start-Sleep -Seconds 10
+                      }
                     }
+
                     if (-not $createdSubId) { throw "created_subscription_id could not be retrieved after creation (timed out)." }
 
                     for ($j=1; $j -le 60; $j++) {
@@ -223,6 +230,7 @@ stages:
                   $env:ARM_OIDC_TOKEN = $token
                 }
 
+                # プロバイダ用サブスク（spoke）を明示
                 Set-TerraformOidcEnv
                 $env:ARM_SUBSCRIPTION_ID = "$(finalSpokeSubscriptionId)"
 
